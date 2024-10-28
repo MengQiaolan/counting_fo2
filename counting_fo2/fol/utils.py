@@ -46,6 +46,10 @@ def pad_vars(vars: frozenset[Var], arity: int) -> frozenset[Var]:
     return frozenset(list(ret_vars)[:arity])
 
 
+def remove_aux_atoms(atoms: set[AtomicFormula]) -> set[AtomicFormula]:
+    return set(filter(lambda atom: not atom.pred.name.startswith('@'), atoms))
+
+
 def exactly_one_qf(preds: list[Pred]) -> QFFormula:
     if len(preds) == 1:
         return top
