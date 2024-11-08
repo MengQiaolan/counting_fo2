@@ -17,7 +17,7 @@ from wfomc.cell_graph.cell_graph import CellGraph, OptimizedCellGraphWithPC
 from wfomc.network.constraint import PartitionConstraint
 
 from wfomc.enum_context import EnumContext
-from wfomc.enum_utils import remove_aux_atoms, Pred_A, fast_wfomc_with_pc, get_init_configs
+from wfomc.enum_utils import remove_aux_atoms, Pred_A, fast_wfomc_with_pc, get_init_configs, Pred_P, Pred_D
 
 
 META_CCS: set[tuple[int]] = set()
@@ -32,11 +32,6 @@ Rel_Dict: dict[tuple[Cell, Cell], set[frozenset[AtomicFormula]]] = {}
 
 Rpred_to_Zpred: dict[Pred, Pred] = {}
 Zpred_to_Rpred: dict[Pred, Pred] = {}
-
-Pi_to_Rel: dict[Pred, frozenset[AtomicFormula]] = {}
-Rel_to_Pi: dict[frozenset[AtomicFormula], Pred] = {}
-Pi_to_elimZ: dict[Pred, set[Pred]] = {}
-Pi_to_elimZ_in_A: dict[Pred, set[Pred]] = {}
 
 Evi_to_Xpred: dict[frozenset[AtomicFormula], Pred] = {}
 Xpred_to_Evi: dict[Pred, frozenset[AtomicFormula]] = {}
@@ -153,7 +148,8 @@ def update_PZ_evidence(evidence_dict: dict[Const, Pred],
                 evidence_dict[firt_arg] = Evi_to_Xpred[frozenset(
                     {atom for atom in Xpred_to_Evi[evidence_dict[firt_arg]] if atom != z_pred(X)})]
     # update x pred when the second element add P unary evidence according to the relation
-    evidence_dict[second_e] = Evi_to_Xpred[frozenset(Xpred_to_Evi[evidence_dict[second_e]]|{Rel_to_Pi[relation](X)})]
+    evidence_dict[second_e] = Evi_to_Xpred[frozenset({Pred_P(X)}|
+                                {atom for atom in Xpred_to_Evi[evidence_dict[second_e]] if atom != ~Pred_P(X)})]
     # update cc after updating evidence
     cc_xpred[evidence_dict[first_e]] += 1
     cc_xpred[evidence_dict[second_e]] += 1
@@ -164,7 +160,7 @@ def clean_P_evidence(evidence_dict: dict[Const, Pred], cc_xpred: dict[Pred, int]
     '''
     for e, xpred in evidence_dict.items():
         cc_xpred[xpred] -= 1
-        evidence_dict[e] = Evi_to_Xpred[frozenset(
+        evidence_dict[e] = Evi_to_Xpred[frozenset({~Pred_P(X)}|
             {atom for atom in Xpred_to_Evi[xpred] 
                     if not atom.pred.name.startswith('@P')})]
         cc_xpred[evidence_dict[e]] += 1
@@ -214,9 +210,9 @@ def ego_structure_sampling(ego_element: Const,
         new_cc_xpred = cc_xpred.copy()
         # update evidence about P and Z according to the selected relation
         update_PZ_evidence(new_evidence_dict, new_cc_xpred, rel, ego_element, cur_element)
-        # print('  '+'    '*(3-len(domain_done)-len(domain_todo))+f'###    ({ego_element}, {cur_element}) => {set(rel)} => {new_evidence_dict}, {new_cc_xpred}')
+        # print('  '+'    '*(3-len(domain_done)-len(domain_todo))+f'    #({ego_element}, {cur_element}) => {set(rel)} => {new_evidence_dict}, {new_cc_xpred}')
         # use tuple instead of dict (non-hashable) to use lru_cache
-        if sat_cc(tuple([new_cc_xpred[key] for key in sorted(new_cc_xpred.keys(), key=lambda x: x.name)])):
+        if sat_cc(tuple([new_cc_xpred[key] for key in sorted(new_cc_xpred.keys(), key=lambda x: int(x.name[2:]))])):
             # print('  '+'    '*(3-len(domain_done)-len(domain_todo))+f'    ({ego_element}, {cur_element}) => {set(rel)} => {new_evidence_dict}, {new_cc_xpred}')
             ego_structure_sampling(
                 ego_element, domain_todo.copy(), domain_done.copy(),
@@ -235,6 +231,8 @@ def generate_config_class(domain_size:int, len_config:int, delta:int):
         for k_sup in range(1, len_config + 1 - k_zero):
             if k_sup * delta + (len_config - k_zero - k_sup) > domain_size:
                 break
+            if delta == 1 and k_sup + k_zero != len_config:
+                continue
             yield (k_zero, k_sup)
 
 def generate_base_configs(len_config, k_zero, k_sup, delta):
@@ -355,11 +353,7 @@ if __name__ == '__main__':
     Zpred_to_Rpred = context.zpred_to_rpred
     Rpred_to_Zpred = context.rpred_to_zpred
 
-    Pi_to_Rel = context.Pi_to_Rel
-    Rel_to_Pi = context.Rel_to_Pi
     Rel_Dict = context.rel_dict
-    Pi_to_elimZ = context.Pi_to_elimZ
-    Pi_to_elimZ_in_A = context.Pi_to_elimZ_in_A
     uni_formula_with_AP = context.uni_formula_AP
     
     x_preds = context.x_preds
@@ -367,7 +361,7 @@ if __name__ == '__main__':
     xpreds_with_P = context.xpreds_with_P
     Evi_to_Xpred = context.Evi_to_Xpred
     Xpred_to_Evi = context.Xpred_to_Evi
-    uni_formula_with_APZX = context.uni_formula_with_APZX
+    uni_formula_with_APZX = context.uni_formula_APZX
     
     # logger.setLevel(logging.CRITICAL)
     # logger.setLevel(logging.INFO)
@@ -382,49 +376,26 @@ if __name__ == '__main__':
         context.map_Xpred_to_Uni_PZX_Cell()
     
     uni_APZX_cell_to_Tpred = context.uni_APZX_cell_to_Tpred
-    skolem_formula_with_APZXT = context.skolem_formula_with_APZXT
+    skolem_formula_APZXT = context.skolem_formula_APZXT
     
     with Timer() as t:
         # global vars for the func 'sat_config'
         sat_config.cache_clear()
         CurCells = uni_APZX_cells
         Cur_Cell_to_Tpred = uni_APZX_cell_to_Tpred
-        Cur_Cell_Graph = OptimizedCellGraphWithPC(skolem_formula_with_APZXT, context.get_weight, DOMAIN_SIZE, 
+        Cur_Cell_Graph = OptimizedCellGraphWithPC(skolem_formula_APZXT, context.get_weight, DOMAIN_SIZE, 
                                                 PartitionConstraint([(tau, 0) for tau in uni_APZX_cell_to_Tpred.values()]))
+        
         # we only consider the case that:
         # 1) there is only one element whose evidence contain '@A(X)'
         A_idx = [idx for idx, cell in enumerate(uni_APZX_cells) if cell.is_positive(Pred_A)]
         # 2) there is at least one element whose evidence contain '@P(X)'
-        P_idx = [i for x in xpreds_with_P for i in Xpred_to_NewCellIndices[x] ]
-        # 3) we can assert that some evi types containing '@A(X)' is impossible
-        # when there are some P evidence in other elements
-        A_idx_to_Zpred: list[set[Pred]] = []
-        negA_idx_to_elimZ_in_A: list[set[Pred]] = []
-        for x in x_preds:
-            if Pred_A(X) not in Xpred_to_Evi[x]:
-                break
-            zs = set(z_atom.pred for z_atom in Xpred_to_Evi[x] if z_atom.pred.name.startswith('@Z'))
-            for _ in Xpred_to_NewCellIndices[x]:
-                A_idx_to_Zpred.append(zs)
-        for x in x_preds:
-            if Pred_A(X) in Xpred_to_Evi[x]:
-                continue
-            zs = set()
-            for p_atom in Xpred_to_Evi[x]:
-                if p_atom.pred.name.startswith('@P') and p_atom.positive:
-                    zs.update(Pi_to_elimZ_in_A[p_atom.pred])
-            for _ in Xpred_to_NewCellIndices[x]:
-                negA_idx_to_elimZ_in_A.append(zs)
-        
-        print(A_idx_to_Zpred)
-        print(negA_idx_to_elimZ_in_A)
+        P_idx = [idx for x_pred in xpreds_with_P 
+                        for idx, cell in enumerate(uni_APZX_cells) if cell.is_positive(x_pred)]
         
         # find all possible initial configurations that satisfy above constraints
-        init_configs = get_init_configs(uni_APZX_cell_graph, 
-                                        len(context.original_ext_formulas), 
-                                        len(A_idx), P_idx, 
-                                        A_idx_to_Zpred, negA_idx_to_elimZ_in_A,
-                                        DOMAIN_SIZE)
+        init_configs = get_init_configs(uni_APZX_cell_graph, len(context.original_ext_formulas), 
+                                        A_idx, P_idx, DOMAIN_SIZE)
         for init_config in init_configs:
             init_holds = [True if (j in A_idx or init_config[j] == 0) else False 
                             for j in range(len(uni_APZX_cells))]
@@ -432,11 +403,11 @@ if __name__ == '__main__':
             # not the sentence with 1-type predicates (@T) and skolem predicates (@skolem)
             calculate_meta_cc(tuple(init_config), tuple(init_holds))
         
-        print(SAT_COUNT)
+    print(SAT_COUNT)
+    print(len(META_CCS))
     print('time: %s', t.elapsed)
-    # print(META_CCS)
-    for cc in META_CCS:
-        print(cc)
+    # for cc in META_CCS:
+    #     print(cc)
     exit()
     
     
@@ -472,19 +443,17 @@ if __name__ == '__main__':
                                 evidence_dict[element] = Evi_to_Xpred[context.init_evi_dict[cell]]
                         logger.info('The init evidence: \n%s', evidence_dict)
                         domain_recursion(context.domain.copy(), evidence_dict, cc_xpred.copy())
+                        # exit()
     logger.info('The number of models: %s', MC)
     print('time: %s', t.elapsed)
-    # sorted_keys = sorted(STATIS_META_CCS, key=lambda k: (STATIS_META_CCS[k], sum(k)), reverse=True)
-    sorted_keys = sorted(STATIS_META_CCS, key=lambda k: (sum(k)), reverse=False)
+    sorted_keys = sorted(STATIS_META_CCS, key=lambda k: (STATIS_META_CCS[k], sum(k)), reverse=True)
+    # sorted_keys = sorted(STATIS_META_CCS, key=lambda k: (sum(k)), reverse=False)
     for k in sorted_keys:
-        print(k, STATIS_META_CCS[k], "        (", sum(k),  sum([k[int(x.name[2:])] for x in xpreds_with_P]), ")")
+        print(k, STATIS_META_CCS[k], "        (", sum(k), ")")
     print()
     for cell in uni_APZX_cells:
         print(cell)
     print()
     for evi_formula in evi_formulas:
         print(evi_formula)
-    print()
-    for rel_formula in context.rel_formulas:
-        print(rel_formula)
     print()

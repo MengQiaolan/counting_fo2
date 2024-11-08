@@ -596,6 +596,17 @@ class OptimizedCellGraphWithPC(CellGraph):
                 lambda idx: self.cells[idx].is_positive(pred), self.i1_ind
             )))
 
+    @functools.lru_cache(maxsize=None, typed=True)
+    def get_two_table_weight(self, cells: Tuple[Cell, Cell],
+                             evidences: FrozenSet[AtomicFormula] = None) -> RingElement:
+        self._check_existence(cells)
+        from wfomc.enum_utils import Pred_A, Pred_P
+        if Pred_P in cells[0].preds:
+            if cells[0].is_positive(Pred_A) and cells[1].is_positive(Pred_P) or \
+                cells[0].is_positive(Pred_P) and cells[1].is_positive(Pred_A):
+                return Rational(1, 1)
+        return self.two_tables.get(cells).get_weight(evidences)
+
     def set_clique_configs(self, clique_configs: dict[int, list[int]]):
         self.clique_configs = clique_configs
         self.ovarall_clique_config = list(sum(v) for _, v in self.clique_configs.items())
@@ -621,7 +632,14 @@ class OptimizedCellGraphWithPC(CellGraph):
         if len(non_self_loop) == 0:
             i1_ind = set()
         else:
-            i1_ind = set(nx.maximal_independent_set(g.subgraph(non_self_loop)))
+            # i1_ind = set(nx.maximal_independent_set(g.subgraph(non_self_loop)))
+            # NOTE: use the maximal independent set with the largest size
+            i1_ind = set()
+            for i in range(5):
+                i1_ind_tmp = set(nx.maximal_independent_set(g.subgraph(non_self_loop)))
+                if len(i1_ind_tmp) > len(i1_ind):
+                    i1_ind = i1_ind_tmp
+                    
         g_ind = set(nx.maximal_independent_set(g, nodes=i1_ind))
         i2_ind = g_ind.difference(i1_ind)
         non_ind = g.nodes - i1_ind - i2_ind

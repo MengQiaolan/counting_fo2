@@ -48,6 +48,8 @@ from wfomc.fol.syntax import AtomicFormula, Const, Pred, QFFormula, a, b, c
 #     return cells
 
 Pred_A = Pred("@A", 1)
+Pred_P = Pred("@P", 1)
+Pred_D = Pred("@D", 2)
 
 ENUM_R_PRED_NAME = '@R'
 ENUM_Z_PRED_NAME = '@Z'
@@ -150,7 +152,7 @@ def fast_wfomc_with_pc(opt_cell_graph_pc: OptimizedCellGraphWithPC,
             res = res + coef * body
     return res
 
-def get_init_configs(cell_graph: CellGraph, m: int, 
+def get_init_configs_old(cell_graph: CellGraph, m: int, 
                      A_prefix_len: int, contain_P_idx: list, 
                      A_idx_to_Zpred: list[set[Pred]], negA_idx_to_elimZ_in_A: list[set[Pred]],
                      domain_size: int) -> dict[int, list[tuple[int, ...]]]:
@@ -183,9 +185,9 @@ def get_init_configs(cell_graph: CellGraph, m: int,
                                 else:
                                     sat_dict[(j, int(pred_name[2:]))].add(i)
         
-        remaining = u - A_prefix_len
+        remaining = u - A_prefix_len - len(contain_P_idx)
         suffixes: list[tuple[int, ...]] = []
-        for k in range(1, domain_size):
+        for k in range(2, domain_size):
             if k > remaining:
                 break
             for indices in combinations(range(remaining), k):
@@ -201,6 +203,9 @@ def get_init_configs(cell_graph: CellGraph, m: int,
         for true_loc in range(A_prefix_len):
             zpred_in_A = A_idx_to_Zpred[true_loc]
             prefix = (0,) * true_loc + (1,) + (0,) * (A_prefix_len - true_loc - 1)
+            for true_loc in range(len(contain_P_idx)):
+                elimZ_by_suffix = set(z for i in range(len(suffix)) if suffix[i] != 0 for z in negA_idx_to_elimZ_in_A[i])
+            
             for suffix in suffixes:
                 elimZ_by_suffix = set(z for i in range(len(suffix)) if suffix[i] != 0 for z in negA_idx_to_elimZ_in_A[i])
                 if len(zpred_in_A & elimZ_by_suffix) != 0:
@@ -227,3 +232,78 @@ def get_init_configs(cell_graph: CellGraph, m: int,
                 if flag:
                     res.append(init_config)
         return res
+    
+    
+def get_init_configs(cell_graph: CellGraph, m: int, 
+                     A_idx: list[int], P_idx: list[int], domain_size: int) -> dict[int, list[tuple[int, ...]]]:
+    
+    cells = cell_graph.get_cells()
+    u = len(cells)
+    
+    # sat_dict[(cell_idx, R_idx)] is a set of cell indices 
+    # that can satisfy the R_idx-th predicate of the cell_idx-th cell
+    sat_dict: dict[tuple[int, int], set[int]] = dict()
+    for i in range(u):
+        for j in range(m):
+            sat_dict[(i, j)] = set()
+    
+    # fill sat_dict
+    for i, cell_i in enumerate(cells):
+        for pred in cell_i.preds:
+            if pred.name.startswith('@R') and cell_i.is_positive(pred):
+                sat_dict[(i, int(pred.name[2:]))].add(i)
+        for j, cell_j in enumerate(cells):
+            if j > i:
+                continue
+            for rel, weight in cell_graph.get_two_tables((cell_i, cell_j)):
+                if weight > 0:
+                    for atom in rel:
+                        pred_name = atom.pred.name
+                        if pred_name.startswith('@R') and atom.positive:
+                            if atom.args[0] == a:
+                                sat_dict[(i, int(pred_name[2:]))].add(j)
+                            else:
+                                sat_dict[(j, int(pred_name[2:]))].add(i)
+    
+    A_prefix_len = len(A_idx)
+    remaining = u - A_prefix_len
+    suffixes: list[tuple[int, ...]] = []
+    for k in range(1, domain_size):
+        if k > remaining:
+            break
+        for indices in combinations(range(remaining), k):
+            l = [0] * remaining
+            for index in indices:
+                l[index] = 1
+            # there is at least one element whose evidence contain '@P(X)'
+            if sum([l[i-A_prefix_len] for i in P_idx]) == 0:
+                continue
+            suffixes.append(tuple(l))
+    
+    res = []
+    for true_loc in range(A_prefix_len):
+        prefix = (0,) * true_loc + (1,) + (0,) * (A_prefix_len - true_loc - 1)
+        
+        for suffix in suffixes:
+            init_config = prefix + suffix
+            cell_set = set([index for index, value in enumerate(init_config) if value != 0])
+            flag = True # record if the init_config is possible sat
+            for i in range(len(init_config)):
+                if init_config[i] == 0:
+                    continue
+                for r in range(m):
+                    need_check = False
+                    for pred in cells[i].preds:
+                        if pred.name.startswith('@Z') and int(pred.name[2:]) == r:
+                            if cells[i].is_positive(pred):
+                                need_check = True
+                    if need_check:
+                        # if there is no cell in cell_set that can satisfy predicate r of i-th cell
+                        if len(sat_dict[(i, r)] & cell_set) == 0:
+                            flag = False
+                            break
+                if not flag:
+                    break
+            if flag:
+                res.append(init_config)
+    return res

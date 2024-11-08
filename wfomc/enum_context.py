@@ -1,13 +1,15 @@
 from __future__ import annotations
 from logzero import logger
 from itertools import combinations
+from copy import deepcopy
 
 from wfomc.fol.syntax import *
 from wfomc.problems import WFOMCProblem
 from wfomc.fol.sc2 import SC2, to_sc2
 from wfomc.fol.utils import new_predicate, exactly_one_qf
 from wfomc.enum_utils import ENUM_R_PRED_NAME, ENUM_Z_PRED_NAME, ENUM_T_PRED_NAME, \
-    ENUM_P_PRED_NAME, ENUM_X_PRED_NAME, SKOLEM_PRED_NAME, build_two_tables, Pred_A
+    ENUM_P_PRED_NAME, ENUM_X_PRED_NAME, SKOLEM_PRED_NAME, build_two_tables, \
+        Pred_A, Pred_D, Pred_P
 from wfomc.utils.third_typing import RingElement, Rational
 from wfomc.cell_graph.cell_graph import CellGraph, Cell, OptimizedCellGraph
 
@@ -26,11 +28,19 @@ class EnumContext(object):
         self._scott()
         
         self._m = len(self.original_ext_formulas)
-        self.delta = max(2*self._m+1, self._m*(self._m+1))
+        self.delta = max(2*self._m+1, self._m*(self._m+1)) if self._m > 0 else 1
         
         self.original_cell_graph: CellGraph = CellGraph(self.original_uni_formula, self.get_weight)
         self.original_cells: list[Cell] = self.original_cell_graph.cells
         self.oricell_to_tau: dict[Cell, Pred] = {cell: new_predicate(1, ENUM_T_PRED_NAME) for cell in self.original_cells}
+        
+        
+        
+        # ===================== Introduce @D predicates (relation) =====================
+        
+        self.uni_formula_D: QFFormula = self.original_uni_formula
+        self.uni_formula_D = self.uni_formula_D & AtomicFormula(Pred_D, (X,X), True) 
+        
         
         # ===================== Introduce @Z predicates (block type) =====================
         
@@ -39,12 +49,13 @@ class EnumContext(object):
         self.zpred_to_rpred: dict[Pred, Pred] = {}
         self.rpred_to_zpred: dict[Pred, Pred] = {}
         self.ext_formulas_Z: list[QuantifiedFormula] = []
+        self.ext_formulas_ZD: list[QuantifiedFormula] = []
         self._introduce_block()
         
         # init evidence set including 1-type, block type and the predicate A
         self.init_evi_dict: dict[Cell, frozenset[AtomicFormula]] = {}
         for cell in self.original_cells:
-            evi = set(cell.get_evidences(X)|{~Pred_A(X)})
+            evi = set(cell.get_evidences(X)|{~Pred_A(X)}|{~Pred_P(X)})
             evi.update({z(X) for z in self.z_preds 
                                 if not cell.is_positive(self.zpred_to_rpred[z])})
             self.init_evi_dict[cell] = frozenset(evi)
@@ -62,6 +73,7 @@ class EnumContext(object):
         self._add_tau_preds()
         
         
+        
         # ===================== Introduce @P predicates (relation) =====================
         # ============== (neccessary to convert binary-evi to unary-evi) ===============
         
@@ -70,15 +82,15 @@ class EnumContext(object):
         self.relations, self.rel_dict = build_two_tables(self.original_uni_formula, self.original_cells)
         
         # build balabala...
-        self.p_preds: set[Pred] = set()
-        self.Pi_to_Rel: dict[Pred, frozenset[AtomicFormula]] = {}
-        self.Rel_to_Pi: dict[frozenset[AtomicFormula], Pred] = {}
-        self.Pi_to_elimZ: dict[Pred, set[Pred]] = {}
-        self.Pi_to_elimZ_in_A: dict[Pred, set[Pred]] = {}
-        self.uni_formula_AP: QFFormula = self.original_uni_formula
-        self.rel_formulas: list[QFFormula] = []
-        self._introduce_rel_formulas()
-        
+        # self.p_preds: set[Pred] = set()
+        # self.Pi_to_Rel: dict[Pred, frozenset[AtomicFormula]] = {}
+        # self.Rel_to_Pi: dict[frozenset[AtomicFormula], Pred] = {}
+        # self.Pi_to_elimZ: dict[Pred, set[Pred]] = {}
+        # self.Pi_to_elimZ_in_A: dict[Pred, set[Pred]] = {}
+        # self.rel_formulas: list[QFFormula] = []
+        self.uni_formula_AP: QFFormula = self.uni_formula_D
+        # self._introduce_rel_formulas()
+        self._introduce_rel_formula()
         
         # ===================== Introduce @X predicates (evidence) =====================
         # ======================= (neccessary to evidence type) ========================
@@ -89,10 +101,11 @@ class EnumContext(object):
         self.xpreds_with_P: set[Pred] = set()
         self.Evi_to_Xpred: dict[frozenset[AtomicFormula], Pred] = {}
         self.Xpred_to_Evi: dict[Pred, frozenset[AtomicFormula]] = {}
-        self.uni_formula_with_APZX: QFFormula = self.uni_formula_AP
+        self.uni_formula_APZX: QFFormula = self.uni_formula_AP
         self._introduce_evi_formulas()
-
-        self.uni_APZX_cell_graph: CellGraph = CellGraph(self.uni_formula_with_APZX, self.get_weight)
+        
+        
+        self.uni_APZX_cell_graph: CellGraph = CellGraph(self.uni_formula_APZX, self.get_weight)
         self.uni_APZX_cells: list[Cell] = self.uni_APZX_cell_graph.cells 
         
         
@@ -103,7 +116,7 @@ class EnumContext(object):
         self.uni_APZX_cell_to_Tpred: dict[Cell, Pred] = \
                                     {cell: new_predicate(1, ENUM_T_PRED_NAME) 
                                             for cell in self.uni_APZX_cells}
-        self.skolem_formula_with_APZXT = self.uni_formula_with_APZX
+        self.skolem_formula_APZXT = self.uni_formula_APZX
         self._skolem_with_T()
 
 
@@ -127,23 +140,26 @@ class EnumContext(object):
             new_atom = new_pred(X,Y)
             formula.quantified_formula.quantified_formula = new_atom
             self.original_ext_formulas.append(formula)
-            self.original_uni_formula = self.original_uni_formula & Equivalence(new_atom, quantified_formula)
-
-        self.original_uni_formula = to_sc2(self.original_uni_formula).uni_formula
+            self.original_uni_formula = self.original_uni_formula.__and__(new_atom.equivalent(quantified_formula))
 
         logger.info('The universal formula: \n%s', self.original_uni_formula)
         logger.info('The existential formulas: \n%s', self.original_ext_formulas)
 
     def _introduce_block(self):
         ext_formulas = self.original_ext_formulas
-        for formula in ext_formulas:
+        for ext_formula in ext_formulas:
             new_pred = new_predicate(1, ENUM_Z_PRED_NAME)
             self.z_preds.add(new_pred)
-            self.zpred_to_rpred[new_pred] = formula.quantified_formula.quantified_formula.pred
+            self.zpred_to_rpred[new_pred] = ext_formula.quantified_formula.quantified_formula.pred
             new_atom = new_pred(X)
-            quantified_formula = formula.quantified_formula.quantified_formula
-            formula.quantified_formula.quantified_formula = to_sc2(Equivalence(new_atom, quantified_formula)).uni_formula
-            self.ext_formulas_Z.append(formula)
+            quantified_formula = ext_formula.quantified_formula.quantified_formula
+            ext_formula.quantified_formula.quantified_formula = new_atom.equivalent(quantified_formula)
+            self.ext_formulas_Z.append(ext_formula)
+            
+            ext_formula_D = deepcopy(ext_formula)
+            ext_formula_D.quantified_formula.quantified_formula = new_atom.equivalent(quantified_formula & Pred_D(X,Y))
+            self.ext_formulas_ZD.append(ext_formula_D)
+            
         # NOTE: the transformated sentence is not equal to the original one if without Z evidence
         logger.info('The existential formulas after introducing blocks: \n%s', self.ext_formulas_Z)
         logger.info('The map from tseitin predicates Zi to existential predicates: \n%s', self.zpred_to_rpred)
@@ -185,39 +201,12 @@ class EnumContext(object):
             self.skolem_tau_formula = self.skolem_tau_formula & new_formula
         self.skolem_tau_cell_graph = CellGraph(self.skolem_tau_formula, self.get_weight)
     
-    def _introduce_rel_formulas(self):
-        p_preds: set[Pred] = set()
-        logger.info('The new formula for relations:')
-        for rel in self.relations:
-            twotable = top
-            elimination_Z = set()
-            elimination_Z_in_A = set()
-            for lit in rel:
-                twotable = twotable & lit
-                if lit.pred.name.startswith('@R') and lit.positive:
-                    # A(X) & P(Y) => R(X,Y)
-                    if lit.args[0] == X:
-                        elimination_Z_in_A.add(self.rpred_to_zpred[lit.pred])
-                    elif lit.args[0] == Y:
-                        elimination_Z.add(self.rpred_to_zpred[lit.pred])
-                    else:
-                        raise RuntimeError('The first arg of the relation must be X or Y')
-            new_p_pred = new_predicate(1, ENUM_P_PRED_NAME)
-            self.p_preds.add(new_p_pred)
-            self.Pi_to_Rel[new_p_pred] = rel
-            self.Pi_to_elimZ[new_p_pred] = elimination_Z
-            self.Pi_to_elimZ_in_A[new_p_pred] = elimination_Z_in_A
-            self.Rel_to_Pi[rel] = new_p_pred
-            p_preds.add(new_p_pred)
-            rel_formula = Implication(Pred_A(X) & new_p_pred(Y), twotable)
-            logger.info(' %s', rel_formula)
-            self.uni_formula_AP = self.uni_formula_AP & rel_formula
-            self.rel_formulas.append(rel_formula)
-        logger.info('The exactly one formula of Pi:')
-        exactly_one_pi = exactly_one_qf(p_preds)
-        logger.info(exactly_one_pi)
-        self.uni_formula_AP = self.uni_formula_AP & exactly_one_pi
-        logger.info('The formula after adding relation formulas: \n%s', self.uni_formula_AP)
+    def _introduce_rel_formula(self):
+        rel_formula = Implication(Pred_A(X) & Pred_P(Y), ~Pred_D(X,Y) & ~Pred_D(Y,X))
+        rel_formula = rel_formula & Implication(~(Pred_A(X) & Pred_P(Y) | Pred_A(Y) & Pred_P(X)), Pred_D(X,Y) & Pred_D(Y,X))
+        logger.info('The new formula for predicates A and P: %s', rel_formula)
+        self.uni_formula_AP = self.uni_formula_AP & to_sc2(rel_formula).uni_formula
+        logger.info('The uni formula after adding A&P formulas: \n%s', self.uni_formula_AP)
         
     
     def _introduce_evi_formulas(self):
@@ -226,7 +215,7 @@ class EnumContext(object):
                                 for i in combinations([pred(X) 
                                     for pred in self.z_preds], r)]
         # exactly one P predicate
-        p_lit_comb = [set()] + [{p(X)} for p in self.p_preds]
+        # p_lit_comb = [set()] + [{p(X)} for p in self.p_preds]
 
         # X preds and evi formulas
         all_evi: list[set[AtomicFormula]] = []
@@ -244,43 +233,48 @@ class EnumContext(object):
                 else:
                     cell_block_combs.append(cell_atoms | zs)
             
-            add_A = [{Pred_A(X)}|s for s in cell_block_combs]
+            add_A = [{Pred_A(X), ~Pred_P(X)}|s for s in cell_block_combs]
             # For an element e, each Pi(e) is determined by A(e) and Cell(e).
             # So we do not need to consider the case of Pi(e) when A(e) is true
             add_negA = [{~Pred_A(X)}|s for s in cell_block_combs]
             # we do not need to consider all comb of Z and P
             # some Z are not neccessary when there are some P 
             # add_negA_P = [set.union(*tup) for tup in product(add_negA, p_lit_comb)]
-            add_negA_P = []
-            for ps in p_lit_comb:
-                elimZ = set(z(X) for p in ps for z in self.Pi_to_elimZ[p.pred])
-                for s in add_negA:
-                    if len(elimZ & s) != 0:
-                        logger.info('Impossible evidence type: %s', ps | s)
-                    else:
-                        add_negA_P.append(ps | s)
-            all_evi = all_evi + add_A + add_negA_P
-        all_evi.sort(key=lambda x: Pred_A(X) in x, reverse=True)
+            add_negA_P = [{Pred_P(X)}|s for s in add_negA]
+            add_negA_negP = [{~Pred_P(X)}|s for s in add_negA]
+            all_evi = all_evi + add_A + add_negA_P + add_negA_negP
+        
+        
+        def sort(evi):
+            if Pred_A(X) in evi:
+                return (1,0)
+            for atom in evi:
+                if atom.pred == Pred_P and atom.positive:
+                    return (0,1)
+            return (0,0)
+        
+        
+        all_evi.sort(key=sort, reverse=True)
 
         for atom_set in all_evi:
             new_x_pred = new_predicate(1, ENUM_X_PRED_NAME)
             self.Xpred_to_Evi[new_x_pred] = frozenset(atom_set)
             self.Evi_to_Xpred[frozenset(atom_set)] = new_x_pred
             self.x_preds.append(new_x_pred)
+            if Pred_P(X) in atom_set:
+                self.xpreds_with_P.add(new_x_pred)
             new_atom = new_x_pred(X)
             
             evidence_type = top
             for atom in atom_set:
-                if atom.pred.name.startswith('@P'):
-                    self.xpreds_with_P.add(new_x_pred)
                 evidence_type = evidence_type & atom
             evi_formulas.append(new_atom.implies(evidence_type))
             
         for evi_formula in evi_formulas:
             logger.info(' %s', evi_formula)
-            self.uni_formula_with_APZX = self.uni_formula_with_APZX & evi_formula
-        self.uni_formula_with_APZX = self.uni_formula_with_APZX & exactly_one_qf(self.x_preds)
-        self.uni_formula_with_APZX = to_sc2(self.uni_formula_with_APZX).uni_formula
+            self.uni_formula_APZX = self.uni_formula_APZX & evi_formula
+        self.uni_formula_APZX = self.uni_formula_APZX & exactly_one_qf(self.x_preds)
+        # self.uni_formula_APZX = to_sc2(self.uni_formula_APZX).uni_formula
         
     def map_Xpred_to_Uni_PZX_Cell(self):
         # when processing SAT with CC, we need Xpred_to_NewCellIndices
@@ -301,9 +295,9 @@ class EnumContext(object):
             for atom in cell.get_evidences(X):
                     new_formula = new_formula & atom
             new_formula = new_formula.equivalent(new_atom)
-            self.skolem_formula_with_APZXT = self.skolem_formula_with_APZXT & new_formula
+            self.skolem_formula_APZXT = self.skolem_formula_APZXT & new_formula
             
-        for ext_formula in self.original_ext_formulas:
-            self.skolem_formula_with_APZXT = self.skolem_formula_with_APZXT \
+        for ext_formula in self.ext_formulas_ZD:
+            self.skolem_formula_APZXT = self.skolem_formula_APZXT \
                                     & self._skolemize_one_formula(ext_formula)
             
