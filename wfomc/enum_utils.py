@@ -36,17 +36,6 @@ from wfomc.fol.syntax import Const, Pred, QFFormula
 
 from wfomc.fol.syntax import AtomicFormula, Const, Pred, QFFormula, a, b, c
 
-
-# def get_cells(preds: tuple[Pred], formula: QFFormula):
-#     gnd_formula_cc: QFFormula = ground_on_tuple(formula, c)
-#     cells = []
-#     code = {}
-#     for model in gnd_formula_cc.models():
-#         for lit in model:
-#             code[lit.pred] = lit.positive
-#         cells.append(Cell(tuple(code[p] for p in preds), preds))
-#     return cells
-
 Pred_A = Pred("@A", 1)
 Pred_P = Pred("@P", 1)
 Pred_D = Pred("@D", 2)
@@ -57,26 +46,41 @@ ENUM_P_PRED_NAME = '@P'
 ENUM_X_PRED_NAME = '@X'
 ENUM_T_PRED_NAME = '@T'
 
-def build_two_tables(formula: QFFormula, cells: list[Cell]) -> tuple[set[frozenset[AtomicFormula]], dict]:
+def build_two_tables(formula: QFFormula, cells: list[Cell]) -> tuple[list[frozenset[AtomicFormula]], dict]:
     models = dict()
     gnd_formula: QFFormula = ground_on_tuple(formula, a, b) & ground_on_tuple(formula, b, a)
     gnd_formula = gnd_formula.substitute({a: X, b: Y})
     gnd_lits = gnd_formula.atoms()
     gnd_lits = gnd_lits.union(frozenset(map(lambda x: ~x, gnd_lits)))
     for model in gnd_formula.models():
-        model = frozenset({atom for atom in model if len(atom.args) ==2 and atom.args[0] != atom.args[1]})
         models[model] = 1
 
-    tables = dict()
+    two_tables: dict[tuple[Cell, Cell], list[frozenset[AtomicFormula]]] = dict()
     for i, cell in enumerate(cells):
-        models_1 = conditional_on(models, gnd_lits, cell.get_evidences(a))
+        models_1 = conditional_on(models, gnd_lits, cell.get_evidences(X))
         for j, other_cell in enumerate(cells):
             if i > j:
-                tables[(cell, other_cell)] = tables[(other_cell, cell)]
+                two_tables[(cell, other_cell)] = two_tables[(other_cell, cell)]
                 continue
-            models_2 = conditional_on(models_1, gnd_lits, other_cell.get_evidences(b))
-            tables[(cell, other_cell)] = set(models_2.keys())
-    return set(models.keys()), tables
+            models_2 = conditional_on(models_1, gnd_lits, other_cell.get_evidences(Y))
+            two_tables[(cell, other_cell)] = []
+            
+            models_3 = list(models_2.keys())
+            def sort(rel):
+                r_num = 0
+                for atom in rel:
+                    if atom.pred.name.startswith(ENUM_R_PRED_NAME):
+                        r_num += 1
+                res = [0]*r_num
+                for atom in rel:
+                    if atom.pred.name.startswith(ENUM_R_PRED_NAME) and atom.args[0] != atom.args[1] and atom.positive:
+                        res[int(atom.pred.name[2:])] = 1
+                return tuple(res)
+            models_3.sort(key=sort, reverse=True)
+            for model in models_3:
+                two_tables[(cell, other_cell)].append(frozenset({atom for atom in model if len(atom.args) == 2 and atom.args[0] != atom.args[1]}))
+                
+    return list(models.keys()), two_tables
 
 def ground_on_tuple(formula: QFFormula, c1: Const, c2: Const = None) -> QFFormula:
         variables = formula.vars()
@@ -100,9 +104,6 @@ def remove_aux_atoms(atoms: set[AtomicFormula]) -> set[AtomicFormula]:
 
 def fast_wfomc_with_pc(opt_cell_graph_pc: OptimizedCellGraphWithPC, 
                        partition_constraint: PartitionConstraint) -> RingElement:
-    # formula: QFFormula, domain_size: int,
-    #                      get_weight: Callable[[Pred], tuple[RingElement, RingElement]],
-    #                      partition_constraint: PartitionConstraint) -> RingElement:
    
     cliques = opt_cell_graph_pc.cliques
     nonind = opt_cell_graph_pc.nonind
@@ -151,88 +152,6 @@ def fast_wfomc_with_pc(opt_cell_graph_pc: OptimizedCellGraphWithPC,
                 )
             res = res + coef * body
     return res
-
-def get_init_configs_old(cell_graph: CellGraph, m: int, 
-                     A_prefix_len: int, contain_P_idx: list, 
-                     A_idx_to_Zpred: list[set[Pred]], negA_idx_to_elimZ_in_A: list[set[Pred]],
-                     domain_size: int) -> dict[int, list[tuple[int, ...]]]:
-        # the first A_prefix_len cells have A(x) and the rest have ~A(x) (we hack this in CellGraph)
-        cells = cell_graph.get_cells()
-        u = len(cells)
-        
-        # sat_dict[(cell_idx, R_idx)] is a set of cell indices 
-        # that can satisfy the R_idx-th predicate of the cell_idx-th cell
-        sat_dict: dict[tuple[int, int], set[int]] = dict()
-        for i in range(u):
-            for j in range(m):
-                sat_dict[(i, j)] = set()
-        
-        # fill sat_dict
-        for i, cell_i in enumerate(cells):
-            for pred in cell_i.preds:
-                if pred.name.startswith('@R') and cell_i.is_positive(pred):
-                    sat_dict[(i, int(pred.name[2:]))].add(i)
-            for j, cell_j in enumerate(cells):
-                if j > i:
-                    continue
-                for rel, weight in cell_graph.get_two_tables((cell_i, cell_j)):
-                    if weight > 0:
-                        for atom in rel:
-                            pred_name = atom.pred.name
-                            if pred_name.startswith('@R') and atom.positive:
-                                if atom.args[0] == a:
-                                    sat_dict[(i, int(pred_name[2:]))].add(j)
-                                else:
-                                    sat_dict[(j, int(pred_name[2:]))].add(i)
-        
-        remaining = u - A_prefix_len - len(contain_P_idx)
-        suffixes: list[tuple[int, ...]] = []
-        for k in range(2, domain_size):
-            if k > remaining:
-                break
-            for indices in combinations(range(remaining), k):
-                l = [0] * remaining
-                for index in indices:
-                    l[index] = 1
-                # there is at least one element whose evidence contain '@P(X)'
-                if k != 0 and sum([l[i-A_prefix_len] for i in contain_P_idx]) == 0:
-                    continue
-                suffixes.append(tuple(l))
-        
-        res = []
-        for true_loc in range(A_prefix_len):
-            zpred_in_A = A_idx_to_Zpred[true_loc]
-            prefix = (0,) * true_loc + (1,) + (0,) * (A_prefix_len - true_loc - 1)
-            for true_loc in range(len(contain_P_idx)):
-                elimZ_by_suffix = set(z for i in range(len(suffix)) if suffix[i] != 0 for z in negA_idx_to_elimZ_in_A[i])
-            
-            for suffix in suffixes:
-                elimZ_by_suffix = set(z for i in range(len(suffix)) if suffix[i] != 0 for z in negA_idx_to_elimZ_in_A[i])
-                if len(zpred_in_A & elimZ_by_suffix) != 0:
-                    continue
-                init_config = prefix + suffix
-                cell_set = set([index for index, value in enumerate(init_config) if value != 0])
-                flag = True # record if the init_config is possible sat
-                for i in range(len(init_config)):
-                    if init_config[i] == 0:
-                        continue
-                    for r in range(m):
-                        need_check = False
-                        for pred in cells[i].preds:
-                            if pred.name.startswith('@Z') and int(pred.name[2:]) == r:
-                                if cells[i].is_positive(pred):
-                                    need_check = True
-                        if need_check:
-                            # if there is no cell in cell_set that can satisfy predicate r of i-th cell
-                            if len(sat_dict[(i, r)] & cell_set) == 0:
-                                flag = False
-                                break
-                    if not flag:
-                        break
-                if flag:
-                    res.append(init_config)
-        return res
-    
     
 def get_init_configs(cell_graph: CellGraph, m: int, 
                      A_idx: list[int], P_idx: list[int], domain_size: int) -> dict[int, list[tuple[int, ...]]]:
