@@ -5,6 +5,7 @@ import argparse
 import logging
 import logzero
 import functools
+import time
 from logzero import logger
 from contexttimer import Timer
 from itertools import combinations
@@ -29,7 +30,7 @@ DELTA: int = 0
 
 ENABLE_DUPLICATE_CONFIG: bool = True
 EARLY_STOP: bool = True
-MC_LIMIT: int = 1000000
+MC_LIMIT: int = 5000000
 
 Domain_to_Cell: dict[Const, Cell] = {}
 Rel_Dict: dict[tuple[Cell, Cell], list[frozenset[AtomicFormula]]] = {}
@@ -175,6 +176,8 @@ def update_A_evidence(ego_element: Const, evidence_dict: dict[Const, Pred], cc_x
                 {atom for atom in Xpred_to_Evi[evidence_dict[ego_element]] if atom != ~Pred_A(X)})]
     cc_xpred[evidence_dict[ego_element]] += 1
 
+START_TIME = None
+LAST_TIME = None
 def domain_recursion(domain: list[Const], 
                      evidence_dict: dict[Const, Pred], 
                      cc_xpred: dict[Pred, int],
@@ -185,6 +188,10 @@ def domain_recursion(domain: list[Const],
         # print(MC, remove_aux_atoms(cur_model))
         if EARLY_STOP and MC > MC_LIMIT:
             raise ExitRecursion
+        if MC % 10000 == 0:
+            global LAST_TIME
+            print(MC/10000, ", ", MC, ", ", time.time()-START_TIME, ", ", time.time()-LAST_TIME)
+            LAST_TIME = time.time()
         return
 
     # ego_element = domain.pop()
@@ -444,6 +451,8 @@ if __name__ == '__main__':
         Cur_Cell_Graph = OptimizedCellGraphWithPC(context.skolem_tau_formula, context.get_weight, DOMAIN_SIZE, 
                                                     PartitionConstraint([(context.oricell_to_tau[cell], 0) for cell in original_cells]))
         try:
+            START_TIME = time.time()
+            LAST_TIME = START_TIME
             # enumerate satisfiable configs
             ori_len_config = len(context.original_cells)
             ori_delta = context.delta
@@ -473,7 +482,7 @@ if __name__ == '__main__':
                                     Domain_to_Cell[element] = cell
                                     evidence_dict[element] = Evi_to_Xpred[context.init_evi_dict[cell]]
                             logger.info('The init evidence: \n%s', evidence_dict)
-                            # domain_list.reverse()
+                            domain_list.reverse()
                             domain_recursion(domain_list, evidence_dict, cc_xpred.copy())
                             if not ENABLE_DUPLICATE_CONFIG:
                                 mc += (MC - cur_model_couting)*MultinomialCoefficients.coef(config)
@@ -505,6 +514,6 @@ if __name__ == '__main__':
     res = f'{DOMAIN_SIZE}, {preprocess_time}, {enumeration_time}, {len(META_CCS)}, {MC}, {mc}, {round(avg_time, 7)}\n'
     print(res)
     
-    filename = args.input + '.res'
-    with open(filename, 'a') as file:
-        file.write(res)
+    # filename = args.input + '.res'
+    # with open(filename, 'a') as file:
+    #     file.write(res)
