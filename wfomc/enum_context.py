@@ -72,9 +72,10 @@ class EnumContext(object):
         # ===================== Introduce @P predicates (relation) =====================
         # ============== (neccessary to convert binary-evi to unary-evi) ===============
         
-        self.relations: set[frozenset[AtomicFormula]] = None
+        self.relations: list[frozenset[AtomicFormula]] = None
         self.rel_dict: dict[tuple[Cell, Cell], list[frozenset[AtomicFormula]]] = {}
         self.relations, self.rel_dict = build_two_tables(self.original_uni_formula, self.original_cells)
+        # self.relations is just for debug
         
         self.uni_formula_DAP: QFFormula = self.uni_formula_D
         self._introduce_rel_formula()
@@ -92,7 +93,7 @@ class EnumContext(object):
         
         
         self.uni_DAPZX_cell_graph: CellGraph = CellGraph(self.uni_formula_DAPZX, self.get_weight)
-        self.uni_DAPZX_cells: list[Cell] = self.uni_DAPZX_cell_graph.cells 
+        self.uni_DAPZX_cells: list[Cell] = self.uni_DAPZX_cell_graph.cells
         
         
         # =================== Skolemize and Introduce @T predicates ===================
@@ -193,12 +194,12 @@ class EnumContext(object):
     
     def _introduce_evi_formulas(self):
         # here we need to consider all possible combinations of Zi predicates
-        z_lit_combs: set[frozenset[AtomicFormula]] = set()
+        z_lit_combs: list[frozenset[AtomicFormula]] = []
         codes = list(product([False, True], repeat=len(self.z_preds)))
         for code in codes:
             comb = frozenset(z(X) if code[self.z_preds.index(z)] else ~z(X) for z in self.z_preds)
-            z_lit_combs.add(comb)
-
+            z_lit_combs.append(comb)
+        
         # X preds and evi formulas
         all_evi: list[set[AtomicFormula]] = []
         evi_formulas: list[QFFormula] = []
@@ -206,18 +207,18 @@ class EnumContext(object):
             cell_atoms: set[AtomicFormula] = set(cell.get_evidences(X))
             # we do not need to consider all comb of tau and Z
             # some Z are not neccessary when there are some tau
-            cell_zlit_combs = []
+            cell_z_lit_combs = []
             for z_lit_comb in z_lit_combs:
                 r_lits = set(self.zpred_to_rpred[z.pred](X,X) for z in z_lit_comb if z.positive)
                 if len(r_lits) != 0 and len(r_lits & cell_atoms) != 0:
                     logger.info('Impossible evidence type: %s', cell_atoms | z_lit_comb)
                 else:
-                    cell_zlit_combs.append(cell_atoms | z_lit_comb)
+                    cell_z_lit_combs.append(cell_atoms | z_lit_comb)
             
-            add_A = [{Pred_A(X), ~Pred_P(X)}|s for s in cell_zlit_combs]
+            add_A = [{Pred_A(X), ~Pred_P(X)}|s for s in cell_z_lit_combs]
             # For an element e, each Pi(e) is determined by A(e) and Cell(e).
             # So we do not need to consider the case of Pi(e) when A(e) is true
-            add_negA = [{~Pred_A(X)}|s for s in cell_zlit_combs]
+            add_negA = [{~Pred_A(X)}|s for s in cell_z_lit_combs]
             # we do not need to consider all comb of Z and P
             # some Z are not neccessary when there are some P 
             add_negA_posP = [{Pred_P(X)}|s for s in add_negA]

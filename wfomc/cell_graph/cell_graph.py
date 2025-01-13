@@ -39,7 +39,10 @@ class CellGraph(object):
         self.get_weight: Callable[[Pred],
                                   Tuple[RingElement, RingElement]] = get_weight
         self.leq_pred: Pred = leq_pred
-        self.preds: Tuple[Pred] = tuple(self.formula.preds())
+        
+        pred_list = sorted(list(self.formula.preds()), key=lambda x: x.name)
+        self.preds: Tuple[Pred] = tuple(pred_list)
+        
         logger.debug('prednames: %s', self.preds)
 
         gnd_formula_ab1: QFFormula = self._ground_on_tuple(
@@ -63,7 +66,7 @@ class CellGraph(object):
 
         # build cells
         self.cells: List[Cell] = self._build_cells()
-        
+        self.cells = sorted(self.cells, key=lambda x: x.code)
         
         # TODO: fix this hard-coded part
         target_A_pred: Pred = None
@@ -253,9 +256,9 @@ class CellGraph(object):
             models_1 = conditional_on(models, gnd_lits, cell.get_evidences(a))
             for j, other_cell in enumerate(self.cells):
                 # NOTE: leq is sensitive to the order of cells
-                if i > j and self.leq_pred is None:
-                    tables[(cell, other_cell)] = tables[(other_cell, cell)]
-                    continue
+                # if i > j and self.leq_pred is None:
+                #     tables[(cell, other_cell)] = tables[(other_cell, cell)]
+                #     continue
                 models_2 = conditional_on(models_1, gnd_lits,
                                           other_cell.get_evidences(b))
                 tables[(cell, other_cell)] = TwoTable(

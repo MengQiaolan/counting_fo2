@@ -202,7 +202,6 @@ def get_init_configs(cell_graph: CellGraph, m: int,
     res = []
     for true_loc in range(A_prefix_len):
         prefix = (0,) * true_loc + (1,) + (0,) * (A_prefix_len - true_loc - 1)
-        
         for suffix in suffixes:
             init_config = prefix + suffix
             cell_set = set([index for index, value in enumerate(init_config) if value != 0])
