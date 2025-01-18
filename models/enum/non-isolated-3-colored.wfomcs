@@ -3,7 +3,8 @@
                         (~R(X) | ~G(X)) &
                         (~R(X) | ~B(X)) &
                         (~G(X) | ~B(X)) &
-                        (E(X,Y) -> ~(R(X) & R(Y)) & ~(B(X) & B(Y)) & ~(G(X) & G(Y))  )))
+                        (E(X,Y) -> ~(R(X) & R(Y)) & ~(B(X) & B(Y)) & ~(G(X) & G(Y))  ))) &
 
+\forall X: (\exists Y: (E(X,Y)))
 
-V = 3
+V = 10

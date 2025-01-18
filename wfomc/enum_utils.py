@@ -23,8 +23,6 @@ from itertools import product
 
 from contexttimer import Timer
 
-from itertools import combinations
-
 from wfomc.utils import multinomial, Rational
 
 from wfomc.cell_graph.utils import conditional_on
@@ -59,9 +57,6 @@ def build_two_tables(formula: QFFormula, cells: list[Cell]) -> tuple[list[frozen
     for i, cell in enumerate(cells):
         models_1 = conditional_on(models, gnd_lits, cell.get_evidences(X))
         for j, other_cell in enumerate(cells):
-            if i > j:
-                two_tables[(cell, other_cell)] = two_tables[(other_cell, cell)]
-                continue
             models_2 = conditional_on(models_1, gnd_lits, other_cell.get_evidences(Y))
             two_tables[(cell, other_cell)] = []
             
@@ -79,7 +74,7 @@ def build_two_tables(formula: QFFormula, cells: list[Cell]) -> tuple[list[frozen
             models_3.sort(key=sort, reverse=True)
             for model in models_3:
                 two_tables[(cell, other_cell)].append(frozenset({atom for atom in model if len(atom.args) == 2 and atom.args[0] != atom.args[1]}))
-                
+      
     return list(models.keys()), two_tables
 
 def ground_on_tuple(formula: QFFormula, c1: Const, c2: Const = None) -> QFFormula:
@@ -151,77 +146,4 @@ def fast_wfomc_with_pc(opt_cell_graph_pc: OptimizedCellGraphWithPC,
                     l, tuple(clique_configs[nonind_map[l]])
                 )
             res = res + coef * body
-    return res
-    
-def get_init_configs(cell_graph: CellGraph, m: int, 
-                     A_idx: list[int], P_idx: list[int], domain_size: int) -> dict[int, list[tuple[int, ...]]]:
-    
-    cells = cell_graph.get_cells()
-    u = len(cells)
-    
-    # sat_dict[(cell_idx, R_idx)] is a set of cell indices 
-    # that can satisfy the R_idx-th predicate of the cell_idx-th cell
-    sat_dict: dict[tuple[int, int], set[int]] = dict()
-    for i in range(u):
-        for j in range(m):
-            sat_dict[(i, j)] = set()
-    
-    # fill sat_dict
-    for i, cell_i in enumerate(cells):
-        for pred in cell_i.preds:
-            if pred.name.startswith('@R') and cell_i.is_positive(pred):
-                sat_dict[(i, int(pred.name[2:]))].add(i)
-        for j, cell_j in enumerate(cells):
-            if j > i:
-                continue
-            for rel, weight in cell_graph.get_two_tables((cell_i, cell_j)):
-                if weight > 0:
-                    for atom in rel:
-                        pred_name = atom.pred.name
-                        if pred_name.startswith('@R') and atom.positive:
-                            if atom.args[0] == a:
-                                sat_dict[(i, int(pred_name[2:]))].add(j)
-                            else:
-                                sat_dict[(j, int(pred_name[2:]))].add(i)
-    
-    A_prefix_len = len(A_idx)
-    remaining = u - A_prefix_len
-    suffixes: list[tuple[int, ...]] = []
-    for k in range(1, domain_size):
-        if k > remaining:
-            break
-        for indices in combinations(range(remaining), k):
-            l = [0] * remaining
-            for index in indices:
-                l[index] = 1
-            # there is at least one element whose evidence contain '@P(X)'
-            if sum([l[i-A_prefix_len] for i in P_idx]) == 0:
-                continue
-            suffixes.append(tuple(l))
-    
-    res = []
-    for true_loc in range(A_prefix_len):
-        prefix = (0,) * true_loc + (1,) + (0,) * (A_prefix_len - true_loc - 1)
-        for suffix in suffixes:
-            init_config = prefix + suffix
-            cell_set = set([index for index, value in enumerate(init_config) if value != 0])
-            flag = True # record if the init_config is possible sat
-            for i in range(len(init_config)):
-                if init_config[i] == 0:
-                    continue
-                for r in range(m):
-                    need_check = False
-                    for pred in cells[i].preds:
-                        if pred.name.startswith('@Z') and int(pred.name[2:]) == r:
-                            if cells[i].is_positive(pred):
-                                need_check = True
-                    if need_check:
-                        # if there is no cell in cell_set that can satisfy predicate r of i-th cell
-                        if len(sat_dict[(i, r)] & cell_set) == 0:
-                            flag = False
-                            break
-                if not flag:
-                    break
-            if flag:
-                res.append(init_config)
     return res

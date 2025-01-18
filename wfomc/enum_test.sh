@@ -19,5 +19,5 @@ fi
 for ((n=start; n<=end; n+=step)); do
     # $sed_inplace '$s/[[:space:]]*=[[:space:]]*[0-9]*/ = '"$i"'/' "$model_file"
     echo "Running with n = $n"
-    python wfomc/enum_fo2.py -i "$model_file" -n "$n" -log C
+    python wfomc/enum_fo2_max.py -i "$model_file" -n "$n" -log C
 done

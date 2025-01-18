@@ -2,5 +2,5 @@
 \forall X: (\exists Y: (E(X,Y))) & 
 \forall X: (\exists Y: (E(Y,X)))
 
-vertices = 2
-|E| = 2
+vertices = 4
+|E| = 4

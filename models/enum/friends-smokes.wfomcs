@@ -1,6 +1,7 @@
 \forall X: (~fr(X,X))
 & \forall X: (\forall Y: (fr(X,Y) -> fr(Y,X)))
 & \forall X: (\forall Y: (fr(X,Y) & sm(X) -> sm(Y))) 
+// & \forall X: (\forall Y: (fr(X,Y) & dr(X) -> dr(Y))) 
 & \forall X: (\exists Y: (fr(X,Y)))
 
-V = 6
+V = 15

@@ -17,7 +17,7 @@ from wfomc.cell_graph.cell_graph import CellGraph, OptimizedCellGraphWithPC
 from wfomc.network.constraint import PartitionConstraint
 
 from wfomc.enum_context import EnumContext
-from enum_utils import fast_wfomc_with_pc, Pred_P, Pred_A, remove_aux_atoms
+from wfomc.enum_utils import fast_wfomc_with_pc, get_init_configs, Pred_P, Pred_A, remove_aux_atoms
 
 
 META_CCS: dict[int, set[tuple[int]]] = dict()
@@ -413,8 +413,8 @@ if __name__ == '__main__':
     else:
         logzero.loglevel(logging.INFO)
     
-    logger.setLevel(logging.CRITICAL)
-    # logger.setLevel(logging.INFO)    
+    # logger.setLevel(logging.CRITICAL)
+    logger.setLevel(logging.INFO)    
     
     logzero.logfile('{}/log.txt'.format(args.output_dir), mode='w')
 
@@ -495,7 +495,7 @@ if __name__ == '__main__':
                 # not the sentence with 1-type predicates (@T) and skolem predicates (@skolem)
                 calculate_meta_cc(tuple(init_config), tuple(init_holds))
             
-            # filename = f'{args.input[:-7]}.{DOMAIN_SIZE}.cache'
+            # filename = f'{args.input[:-7]}/cache/{args.input[:-7]}.{DOMAIN_SIZE}.cache'
             # with open(filename, 'a') as file:
             #     for k, v in META_CCS.items():
             #         for cc in v:
@@ -508,6 +508,8 @@ if __name__ == '__main__':
     # print(len(META_CCS))
     
     logger.info('time: %s', preprocess_time)
+    
+    print(original_cells)
     
     mc = 0
     with Timer() as t_enumaration:

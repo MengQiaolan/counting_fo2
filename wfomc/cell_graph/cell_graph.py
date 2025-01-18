@@ -200,6 +200,78 @@ class CellGraph(object):
             -> Tuple[FrozenSet[AtomicFormula], RingElement]:
         self._check_existence(cells)
         return self.two_tables.get(cells).get_two_tables(evidences)
+    
+    @functools.lru_cache(maxsize=None)
+    def get_two_tables_without_weight(self, cells: Tuple[Cell, Cell],
+                       evidences: FrozenSet[AtomicFormula] = None) \
+            -> FrozenSet[FrozenSet[AtomicFormula]]:
+        self._check_existence(cells)
+        res = self.two_tables.get(cells).get_two_tables(evidences)
+        return frozenset(x[0] for x in res)
+    
+    @functools.lru_cache(maxsize=None)
+    def get_sat_two_tables(self, cells: Tuple[Cell, Cell],
+                       evidences: FrozenSet[AtomicFormula] = None) \
+            -> FrozenSet[FrozenSet[AtomicFormula]]:
+        self._check_existence(cells)
+        two_table = self.two_tables.get(cells).get_two_tables(evidences)
+        two_table_without_weight = frozenset(x[0] for x in two_table)
+        
+        res = set()
+        for two_type in two_table_without_weight:
+            # sat_type = frozenset(lit for lit in two_type if lit.pred.name.startswith('@R') and lit.args[0] != lit.args[1])
+            sat_type = set()
+            for lit_Z in two_type:
+                if lit_Z.pred.name.startswith('@Z'):
+                    if lit_Z.args[0] == a:
+                        e1, e2 = a, b
+                    else:
+                        e1, e2 = b, a
+                    no = int(lit_Z.pred.name[2:])
+                    if not lit_Z.positive:
+                        sat_type.add(Pred(f'@B{no}', 2)(e1, e2))
+                    else:
+                        for lit_R in two_type:
+                            if lit_R.pred.name.startswith('@R') and lit_R.args[0] == e1 and lit_R.args[1] == e2:
+                                if lit_R.positive:
+                                    for lit_D in two_type:
+                                        if lit_D.pred.name.startswith('@D') and lit_D.args[0] == e1 and lit_D.args[1] == e2:
+                                            if lit_D.positive:
+                                                sat_type.add(Pred(f'@B{no}', 2)(e1, e2))
+                                            else:
+                                                pass
+                                                # 只包含true的lit
+                                                # sat_type.add(Pred(f'@B{no}', 2)(e1, e2).__invert__())
+                                            break
+                                else:
+                                    pass
+                                    # sat_type.add(Pred(f'@B{no}', 2)(e1, e2).__invert__())
+                                break   
+            # print(cells[0])
+            # print(cells[1])
+            # print(two_table)
+            # print(sat_type)
+            # print()
+            sat_type = frozenset(sat_type)
+            res.add(sat_type)
+
+        simplified_res = []
+        for sat_type_1 in res:
+            is_subset = False
+            for sat_type_2 in res:
+                if sat_type_1 < sat_type_2:
+                    is_subset = True
+                    break
+            if not is_subset:
+                simplified_res.append(sat_type_1)
+                
+        # if len(simplified_res) < len(res):
+        #     print(res, "  =>  ", simplified_res)        
+        
+        res = simplified_res
+        
+            
+        return frozenset(res)
 
     def _build_cells(self):
         cells = []
@@ -283,6 +355,35 @@ class OptimizedCellGraph(CellGraph):
         self.domain_size: int = domain_size
         MultinomialCoefficients.setup(self.domain_size)
 
+        for cell in self.cells:
+            print(cell)
+        print()
+        
+        adj_mat = []
+        tmp_dict = dict()
+        tmp_no = 0
+        for cell in self.cells:
+            adj_mat.append([0] * len(self.cells))
+            for cell2 in self.cells:
+                # print(cell)
+                # print(cell2)
+                if self.get_sat_two_tables((cell, cell2)) in tmp_dict:
+                    print(tmp_dict[self.get_sat_two_tables((cell, cell2))], end=" ")
+                else:
+                    tmp_dict[self.get_sat_two_tables((cell, cell2))] = tmp_no
+                    tmp_no += 1
+                    print(tmp_dict[self.get_sat_two_tables((cell, cell2))], end=" ")
+                adj_mat[self.cells.index(cell)][self.cells.index(cell2)] = tmp_dict[self.get_sat_two_tables((cell, cell2))]
+            print()
+        # exit(1)
+        for k,v in tmp_dict.items():
+            print(v, k)
+        print()
+        
+        print(adj_mat)
+        # exit(1)
+        
+
         if self.modified_cell_symmetry:
             i1_ind_set, i2_ind_set, nonind_set = self.find_independent_sets()
             self.cliques, [self.i1_ind, self.i2_ind, self.nonind] = \
@@ -314,7 +415,31 @@ class OptimizedCellGraph(CellGraph):
                 cells.remove(other_cell)
             cliques.append(clique)
         cliques.sort(key=len)
-        logger.info("Built %s symmetric cliques: %s", len(cliques), cliques)
+        
+        Pred_A = Pred("@A", 1)
+        new_cliques = []
+        for clique in cliques:
+            new_clique_A = []
+            new_clique_nA = []
+            for cell in clique:
+                # if A in cell is true
+                if cell.is_positive(Pred_A):
+                    new_clique_A.append(cell)
+                else:
+                    new_clique_nA.append(cell)
+            
+            if new_clique_A:
+                new_cliques.append(new_clique_A)
+            if new_clique_nA:
+                new_cliques.append(new_clique_nA)
+        cliques = new_cliques
+        
+        logger.info("Built %s symmetric cliques:", len(cliques))
+        for i, clique in enumerate(cliques):
+            logger.info("Clique %s: ", i)
+            for cell in clique:
+                logger.info("  %s, %s",cell, self.get_cell_weight(cell))
+            logger.info("")
         return cliques
 
     def build_symmetric_cliques_in_ind(self, cell_indices_list) -> \
@@ -396,25 +521,46 @@ class OptimizedCellGraph(CellGraph):
         non_ind = g.nodes - i1_ind - i2_ind
         return list(i1_ind), list(i2_ind), list(g_ind), list(non_ind)
 
+    # def _matches(self, clique, other_cell) -> bool:
+    #     cell = clique[0]
+    #     if not self.modified_cell_symmetry:
+    #         if self.get_cell_weight(cell) != self.get_cell_weight(other_cell) or \
+    #                 self.get_two_table_weight((cell, cell)) != self.get_two_table_weight((other_cell, other_cell)):
+    #             return False
+
+    #     if len(clique) > 1:
+    #         third_cell = clique[1]
+    #         r = self.get_two_table_weight((cell, third_cell))
+    #         for third_cell in clique:
+    #             if r != self.get_two_table_weight((other_cell, third_cell)):
+    #                 return False
+
+    #     for third_cell in self.get_cells():
+    #         if other_cell == third_cell or third_cell in clique:
+    #             continue
+    #         r = self.get_two_table_weight((cell, third_cell))
+    #         if r != self.get_two_table_weight((other_cell, third_cell)):
+    #             return False
+    #     return True
+    
     def _matches(self, clique, other_cell) -> bool:
         cell = clique[0]
         if not self.modified_cell_symmetry:
-            if self.get_cell_weight(cell) != self.get_cell_weight(other_cell) or \
-                    self.get_two_table_weight((cell, cell)) != self.get_two_table_weight((other_cell, other_cell)):
+            if self.get_sat_two_tables((cell, cell)) != self.get_sat_two_tables((other_cell, other_cell)):
                 return False
 
         if len(clique) > 1:
             third_cell = clique[1]
-            r = self.get_two_table_weight((cell, third_cell))
+            r = self.get_sat_two_tables((cell, third_cell))
             for third_cell in clique:
-                if r != self.get_two_table_weight((other_cell, third_cell)):
+                if r != self.get_sat_two_tables((other_cell, third_cell)):
                     return False
 
         for third_cell in self.get_cells():
             if other_cell == third_cell or third_cell in clique:
                 continue
-            r = self.get_two_table_weight((cell, third_cell))
-            if r != self.get_two_table_weight((other_cell, third_cell)):
+            r = self.get_sat_two_tables((cell, third_cell))
+            if r != self.get_sat_two_tables((other_cell, third_cell)):
                 return False
         return True
 

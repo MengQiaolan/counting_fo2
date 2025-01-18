@@ -383,22 +383,22 @@ if __name__ == '__main__':
     Rpred_to_Zpred = context.rpred_to_zpred
 
     Rel_Dict = context.rel_dict
-    uni_formula_with_AP = context.uni_formula_DAP
+    uni_formula_with_AP = context.auxiliary_uni_formula
     
     x_preds = context.x_preds
     evi_formulas = context.evi_formulas
     xpreds_with_P = context.xpreds_with_P
     Evi_to_Xpred = context.Evi_to_Xpred
     Xpred_to_Evi = context.Xpred_to_Evi
-    uni_formula_with_APZX = context.uni_formula_DAPZX
+    uni_formula_with_APZX = context.auxiliary_uni_formula
     
-    uni_APZX_cell_graph = context.uni_DAPZX_cell_graph
+    uni_APZX_cell_graph = context.auxiliary_uni_formula_cell_graph
     uni_APZX_cells: list[Cell] = uni_APZX_cell_graph.cells 
     
     # for cell in uni_APZX_cells:
     #     print(cell)
     
-    uni_APZX_cell_to_Tpred = context.uni_DAPZX_cell_to_Tpred
+    uni_APZX_cell_to_Tpred = context.auxcell_to_onetype_pred
     skolem_formula_APZXT = context.skolem_formula_DAPZXT
     
     # init META_CCS
@@ -447,9 +447,9 @@ if __name__ == '__main__':
     # global variables for 'sat_config' function
         sat_config.cache_clear()
         CurCells = original_cells
-        Cur_Cell_to_Tpred = context.oricell_to_tau
+        Cur_Cell_to_Tpred = context.oricell_to_onetype_pred
         Cur_Cell_Graph = OptimizedCellGraphWithPC(context.skolem_tau_formula, context.get_weight, DOMAIN_SIZE, 
-                                                    PartitionConstraint([(context.oricell_to_tau[cell], 0) for cell in original_cells]))
+                                                    PartitionConstraint([(context.oricell_to_onetype_pred[cell], 0) for cell in original_cells]))
         try:
             START_TIME = time.time()
             LAST_TIME = START_TIME

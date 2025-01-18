@@ -10,7 +10,36 @@ from wfomc.fol.utils import new_predicate, exactly_one_qf
 from wfomc.enum_utils import ENUM_R_PRED_NAME, ENUM_Z_PRED_NAME, ENUM_T_PRED_NAME, \
     ENUM_X_PRED_NAME, SKOLEM_PRED_NAME, build_two_tables, Pred_A, Pred_D, Pred_P
 from wfomc.utils.third_typing import RingElement, Rational
-from wfomc.cell_graph.cell_graph import CellGraph, Cell
+from wfomc.cell_graph.cell_graph import CellGraph, Cell, OptimizedCellGraph
+
+def skolemize_one_formula(formula: QuantifiedFormula, 
+                          weights: dict[Pred, tuple[Rational, Rational]]) -> tuple[QFFormula, set[Pred]]:
+    quantified_formula = formula.quantified_formula
+    quantifier_num = 1
+    while(not isinstance(quantified_formula, QFFormula)):
+        quantified_formula = quantified_formula.quantified_formula
+        quantifier_num += 1
+
+    if quantifier_num == 2:
+        skolem_pred = new_predicate(1, SKOLEM_PRED_NAME)
+        skolem_atom = skolem_pred(X)
+    elif quantifier_num == 1:
+        skolem_pred = new_predicate(0, SKOLEM_PRED_NAME)
+        skolem_atom = skolem_pred()
+    weights[skolem_pred] = (Rational(1, 1), Rational(-1, 1))
+    return (skolem_atom | ~ quantified_formula)
+
+def skolemize_sentence(uni_formula: QFFormula, ext_formulas: list[QuantifiedFormula], 
+                       weights: dict[Pred, tuple[Rational, Rational]]) -> QFFormula:
+    skolem_formula = uni_formula
+    while(not isinstance(skolem_formula, QFFormula)):
+        skolem_formula = skolem_formula.quantified_formula
+    
+    for ext_formula in ext_formulas:
+        skolem_formula = skolem_formula \
+                                & skolemize_one_formula(ext_formula, weights)
+    return skolem_formula
+
 
 class EnumContext(object):
     """
@@ -21,42 +50,75 @@ class EnumContext(object):
         self.sentence: SC2 = problem.sentence
         self.weights: dict[Pred, tuple[Rational, Rational]] = problem.weights
         
+        self.domain_: set[int] = set()
+        for e in self.domain:
+            self.domain_.add(int(e.name[1:]))
+        self.domain = self.domain_
+        
         # build self.original_uni_formula and self.original_ext_formulas
         self.original_uni_formula: QFFormula = self.sentence.uni_formula
         self.original_ext_formulas: list[QuantifiedFormula] = []
         self._scott()
         
         self._m = len(self.original_ext_formulas)
-        self.delta = max(2*self._m+1, self._m*(self._m+1)) if self._m > 0 else 1
+        # self.delta = max(2*self._m+1, self._m*(self._m+1)) if self._m > 0 else 1
+        self.delta = self._m*(self._m+1) if self._m > 0 else 1
         
         self.original_cell_graph: CellGraph = CellGraph(self.original_uni_formula, self.get_weight)
         self.original_cells: list[Cell] = self.original_cell_graph.cells
-        self.oricell_to_tau: dict[Cell, Pred] = {cell: new_predicate(1, ENUM_T_PRED_NAME) for cell in self.original_cells}
+        self.oricell_to_onetype_pred: dict[Cell, Pred] = {cell: new_predicate(1, ENUM_T_PRED_NAME) for cell in self.original_cells}
+        
+        
+        self.original_cell_correlation: dict[tuple[Cell, Cell], int] = dict()
+        for i, cell_i in enumerate(self.original_cells):
+            for j, cell_j in enumerate(self.original_cells):
+                if i > j:
+                    continue
+                self.original_cell_correlation[(cell_i, cell_j)] = len(self.original_cell_graph.two_tables[(cell_i, cell_j)].models)
+                self.original_cell_correlation[(cell_j, cell_i)] = len(self.original_cell_graph.two_tables[(cell_i, cell_j)].models)
+    
         
         # ===================== Skolemize and Introduce @T predicates =====================
-        # =================== (neccessary to calculate template configs) ==================
+        # each atom of @T/1 equals to a cell formula
+        # neccessary to calculate template configs
         
-        # build self.original_skolem_formula
-        self.original_skolem_formula: QFFormula = self.original_uni_formula
-        self._skolemize()
+        self.original_skolem_formula: QFFormula = skolemize_sentence(self.original_uni_formula, 
+                                                                     self.original_ext_formulas, 
+                                                                     self.weights)
         
-        # build self.skolem_tau_formula and self.skolem_tau_cell_graph
-        self.skolem_tau_formula: QFFormula = self.original_skolem_formula
-        self.skolem_tau_cell_graph: CellGraph
-        self._add_tau_preds()
-        
+        for cell, onetype_pred in self.oricell_to_onetype_pred.items():
+            new_atom = onetype_pred(X)
+            new_formula = top
+            for atom in cell.get_evidences(X):
+                new_formula = new_formula & atom
+            new_formula = new_formula.equivalent(new_atom)
+            self.original_skolem_formula = self.original_skolem_formula & new_formula
+        self.original_skolem_cell_graph = CellGraph(self.original_skolem_formula, self.get_weight)
         
         # ===================== Introduce @D predicates  =====================
         
-        self.uni_formula_D: QFFormula = self.original_uni_formula & AtomicFormula(Pred_D, (X,X), True)
+        self.auxiliary_uni_formula: QFFormula = self.original_uni_formula & AtomicFormula(Pred_D, (X,X), True) # TODO
         
         # ===================== Introduce @Z predicates (block type) =====================
         
         self.z_preds: list[Pred] = []
         self.zpred_to_rpred: dict[Pred, Pred] = {}
         self.rpred_to_zpred: dict[Pred, Pred] = {}
-        self.ext_formulas_ZD: list[QuantifiedFormula] = []
-        self._introduce_block()
+        self.auxiliary_ext_formulas: list[QuantifiedFormula] = []
+        
+        ext_formulas = self.original_ext_formulas
+        for ext_formula in ext_formulas:
+            new_pred = new_predicate(1, ENUM_Z_PRED_NAME)
+            self.z_preds.append(new_pred)
+            self.zpred_to_rpred[new_pred] = ext_formula.quantified_formula.quantified_formula.pred
+            self.rpred_to_zpred[self.zpred_to_rpred[new_pred]] = new_pred
+            new_atom = new_pred(X)
+            quantified_formula = ext_formula.quantified_formula.quantified_formula
+            ext_formula.quantified_formula.quantified_formula = new_atom.implies(quantified_formula & Pred_D(X,Y))
+            self.auxiliary_ext_formulas.append(ext_formula)
+        logger.info('The existential formulas after introducing blocks: \n%s', self.auxiliary_ext_formulas)
+        logger.info('The map from tseitin predicates Zi to existential predicates: \n%s', self.zpred_to_rpred)
+        
         
         # init evidence set including 1-type, block type and the predicate A
         self.init_evi_dict: dict[Cell, frozenset[AtomicFormula]] = {}
@@ -70,15 +132,18 @@ class EnumContext(object):
             logger.info('%s: %s', cell, evi)
         
         # ===================== Introduce @P predicates (relation) =====================
-        # ============== (neccessary to convert binary-evi to unary-evi) ===============
+        # Pred_P(Y) denotes the relation between the target element and Y has been Processed
         
         self.relations: list[frozenset[AtomicFormula]] = None
         self.rel_dict: dict[tuple[Cell, Cell], list[frozenset[AtomicFormula]]] = {}
         self.relations, self.rel_dict = build_two_tables(self.original_uni_formula, self.original_cells)
         # self.relations is just for debug
         
-        self.uni_formula_DAP: QFFormula = self.uni_formula_D
-        self._introduce_rel_formula()
+        rel_formula = Implication(Pred_A(X) & Pred_P(Y), ~Pred_D(X,Y) & ~Pred_D(Y,X))
+        rel_formula = rel_formula & Implication(~(Pred_A(X) & Pred_P(Y) | Pred_A(Y) & Pred_P(X)), Pred_D(X,Y) & Pred_D(Y,X))
+        logger.info('The new formula for predicates A and P: %s', rel_formula)
+        self.auxiliary_uni_formula = self.auxiliary_uni_formula & to_sc2(rel_formula).uni_formula
+        logger.info('The uni formula after adding A&P formulas: \n%s', self.auxiliary_uni_formula)
         
         # ===================== Introduce @X predicates (evidence) =====================
         # ======================= (neccessary to evidence type) ========================
@@ -88,23 +153,39 @@ class EnumContext(object):
         self.xpreds_with_P: set[Pred] = set()
         self.Evi_to_Xpred: dict[frozenset[AtomicFormula], Pred] = {}
         self.Xpred_to_Evi: dict[Pred, frozenset[AtomicFormula]] = {}
-        self.uni_formula_DAPZX: QFFormula = self.uni_formula_DAP
         self._introduce_evi_formulas()
         
         
-        self.uni_DAPZX_cell_graph: CellGraph = CellGraph(self.uni_formula_DAPZX, self.get_weight)
-        self.uni_DAPZX_cells: list[Cell] = self.uni_DAPZX_cell_graph.cells
+        print(self.auxiliary_ext_formulas)
+        
+        
+        print()
+        print(self.auxiliary_uni_formula)
+        print()
+        OptimizedCellGraph(self.auxiliary_uni_formula, self.get_weight, domain_size=10, modified_cell_symmetry=False)
+        # exit(1)
+        
+        self.auxiliary_uni_formula_cell_graph: CellGraph = CellGraph(self.auxiliary_uni_formula, self.get_weight)
+        self.auxiliary_formula_cells: list[Cell] = self.auxiliary_uni_formula_cell_graph.cells
         
         
         # =================== Skolemize and Introduce @T predicates ===================
         # =================== (neccessary to calculate meta configs) ==================
         
         # build balabala...
-        self.uni_DAPZX_cell_to_Tpred: dict[Cell, Pred] = \
-                                    {cell: new_predicate(1, ENUM_T_PRED_NAME) 
-                                            for cell in self.uni_DAPZX_cells}
-        self.skolem_formula_DAPZXT = self.uni_formula_DAPZX
-        self._skolem_with_T()
+        # self.skolem_formula_DAPZXT = self.auxiliary_uni_formula
+        
+        # for ext_formula in self.auxiliary_ext_formulas:
+        #     self.skolem_formula_DAPZXT = self.skolem_formula_DAPZXT \
+        #                             & skolemize_one_formula(ext_formula, self.weights)
+          
+        # print()                          
+        # print(self.skolem_formula_DAPZXT)
+        # print()
+        # OptimizedCellGraph(self.skolem_formula_DAPZXT, self.get_weight, domain_size=10, modified_cell_symmetry=False)
+            
+        # exit(1)
+
 
 
 
@@ -131,66 +212,6 @@ class EnumContext(object):
 
         logger.info('The universal formula: \n%s', self.original_uni_formula)
         logger.info('The existential formulas: \n%s', self.original_ext_formulas)
-
-    def _introduce_block(self):
-        ext_formulas = self.original_ext_formulas
-        for ext_formula in ext_formulas:
-            new_pred = new_predicate(1, ENUM_Z_PRED_NAME)
-            self.z_preds.append(new_pred)
-            self.zpred_to_rpred[new_pred] = ext_formula.quantified_formula.quantified_formula.pred
-            new_atom = new_pred(X)
-            quantified_formula = ext_formula.quantified_formula.quantified_formula
-            ext_formula.quantified_formula.quantified_formula = new_atom.implies(quantified_formula & Pred_D(X,Y))
-            self.ext_formulas_ZD.append(ext_formula)
-            
-        # NOTE: the transformated sentence is not equal to the original one if without Z evidence
-        logger.info('The existential formulas after introducing blocks: \n%s', self.ext_formulas_ZD)
-        logger.info('The map from tseitin predicates Zi to existential predicates: \n%s', self.zpred_to_rpred)
-        for z, r in self.zpred_to_rpred.items():
-            self.rpred_to_zpred[r] = z
-        return 
-    
-    def _skolemize_one_formula(self, formula: QuantifiedFormula) -> QFFormula:
-        quantified_formula = formula.quantified_formula
-        quantifier_num = 1
-        while(not isinstance(quantified_formula, QFFormula)):
-            quantified_formula = quantified_formula.quantified_formula
-            quantifier_num += 1
-
-        if quantifier_num == 2:
-            skolem_pred = new_predicate(1, SKOLEM_PRED_NAME)
-            skolem_atom = skolem_pred(X)
-        elif quantifier_num == 1:
-            skolem_pred = new_predicate(0, SKOLEM_PRED_NAME)
-            skolem_atom = skolem_pred()
-        self.weights[skolem_pred] = (Rational(1, 1), Rational(-1, 1))
-        return (skolem_atom | ~ quantified_formula)
-    
-    def _skolemize(self):
-        while(not isinstance(self.original_skolem_formula, QFFormula)):
-            self.original_skolem_formula = self.original_skolem_formula.quantified_formula
-        
-        for ext_formula in self.original_ext_formulas:
-            self.original_skolem_formula = self.original_skolem_formula \
-                                    & self._skolemize_one_formula(ext_formula)
-    
-    def _add_tau_preds(self):
-        for cell, tau in self.oricell_to_tau.items():
-            new_atom = tau(X)
-            new_formula = top
-            for atom in cell.get_evidences(X):
-                new_formula = new_formula & atom
-            new_formula = new_formula.equivalent(new_atom)
-            self.skolem_tau_formula = self.skolem_tau_formula & new_formula
-        self.skolem_tau_cell_graph = CellGraph(self.skolem_tau_formula, self.get_weight)
-    
-    def _introduce_rel_formula(self):
-        rel_formula = Implication(Pred_A(X) & Pred_P(Y), ~Pred_D(X,Y) & ~Pred_D(Y,X))
-        rel_formula = rel_formula & Implication(~(Pred_A(X) & Pred_P(Y) | Pred_A(Y) & Pred_P(X)), Pred_D(X,Y) & Pred_D(Y,X))
-        logger.info('The new formula for predicates A and P: %s', rel_formula)
-        self.uni_formula_DAP = self.uni_formula_DAP & to_sc2(rel_formula).uni_formula
-        logger.info('The uni formula after adding A&P formulas: \n%s', self.uni_formula_DAP)
-        
     
     def _introduce_evi_formulas(self):
         # here we need to consider all possible combinations of Zi predicates
@@ -252,19 +273,5 @@ class EnumContext(object):
             
         for evi_formula in evi_formulas:
             logger.info(' %s', evi_formula)
-            self.uni_formula_DAPZX = self.uni_formula_DAPZX & evi_formula
-        self.uni_formula_DAPZX = self.uni_formula_DAPZX & exactly_one_qf(self.x_preds)
-    
-    def _skolem_with_T(self):
-        for cell, tau in self.uni_DAPZX_cell_to_Tpred.items():
-            new_atom = tau(X)
-            new_formula = top
-            for atom in cell.get_evidences(X):
-                    new_formula = new_formula & atom
-            new_formula = new_formula.equivalent(new_atom)
-            self.skolem_formula_DAPZXT = self.skolem_formula_DAPZXT & new_formula
-            
-        for ext_formula in self.ext_formulas_ZD:
-            self.skolem_formula_DAPZXT = self.skolem_formula_DAPZXT \
-                                    & self._skolemize_one_formula(ext_formula)
-            
+            self.auxiliary_uni_formula = self.auxiliary_uni_formula & evi_formula
+        self.auxiliary_uni_formula = self.auxiliary_uni_formula & exactly_one_qf(self.x_preds)

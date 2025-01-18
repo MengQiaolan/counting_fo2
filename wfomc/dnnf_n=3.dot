@@ -1,0 +1,36 @@
+strict digraph "" {
+	node [label="\N"];
+	0	[label=Or];
+	1	[label=And];
+	0 -> 1;
+	8	[label=And];
+	0 -> 8;
+	leaf_0	[label="0(21)"];
+	1 -> leaf_0;
+	2	[label=Or];
+	1 -> 2;
+	leaf_6	[label="1(21)"];
+	8 -> leaf_6;
+	10	[label=And];
+	8 -> 10;
+	3	[label=And];
+	2 -> 3;
+	5	[label=And];
+	2 -> 5;
+	leaf_1	[label="b0(2, 0)"];
+	3 -> leaf_1;
+	4	[label=Or];
+	3 -> 4;
+	leaf_4	[label="1(20)"];
+	5 -> leaf_4;
+	leaf_5	[label="b0(1, 0)"];
+	5 -> leaf_5;
+	leaf_2	[label="0(10)"];
+	4 -> leaf_2;
+	leaf_3	[label="1(10)"];
+	4 -> leaf_3;
+	leaf_7	[label="0(20)"];
+	10 -> leaf_7;
+	leaf_8	[label="b0(1, 0)"];
+	10 -> leaf_8;
+}

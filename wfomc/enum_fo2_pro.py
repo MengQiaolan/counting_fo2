@@ -9,6 +9,7 @@ from logzero import logger
 from contexttimer import Timer
 from itertools import combinations
 
+from wfomc.config_sat import ConfigSAT
 from wfomc.parser import parse_input
 from wfomc.fol.syntax import AtomicFormula, Const, Pred, X, Y
 from wfomc.utils import MultinomialCoefficients, multinomial
@@ -17,7 +18,7 @@ from wfomc.cell_graph.cell_graph import CellGraph, OptimizedCellGraphWithPC
 from wfomc.network.constraint import PartitionConstraint
 
 from wfomc.enum_context import EnumContext
-from enum_utils import fast_wfomc_with_pc, Pred_P, Pred_A, remove_aux_atoms
+from wfomc.enum_utils import fast_wfomc_with_pc, get_init_configs, Pred_P, Pred_A, remove_aux_atoms
 
 
 META_CCS: dict[int, set[tuple[int]]] = dict()
@@ -29,7 +30,7 @@ DELTA: int = 0
 
 ENABLE_DUPLICATE_CONFIG: bool = True
 EARLY_STOP: bool = True
-MC_LIMIT: int = 1000000
+MC_LIMIT: int = 10000000
 
 Domain_to_Cell: dict[Const, Cell] = {}
 Rel_Dict: dict[tuple[Cell, Cell], list[frozenset[AtomicFormula]]] = {}
@@ -40,9 +41,12 @@ Zpred_to_Rpred: dict[Pred, Pred] = {}
 Evi_to_Xpred: dict[frozenset[AtomicFormula], Pred] = {}
 Xpred_to_Evi: dict[Pred, frozenset[AtomicFormula]] = {}
 
+# NOTE(lucien): for checking the satifiability of configs
+Config_SAT: ConfigSAT = None
+
 class ExitRecursion(Exception):
     pass
-   
+
 @functools.lru_cache(maxsize=None)
 def calculate_meta_cc(config: tuple, hold: tuple):
     global META_CCS, STATIS_META_CCS
@@ -57,11 +61,11 @@ def calculate_meta_cc(config: tuple, hold: tuple):
         return
     if sum(config) == DOMAIN_SIZE:
         return
-    
+
     hold = list(hold)
     # hold[i]==True means that we don't need to increase the i-th element
     # to get a new increamented config,
-    # since it has been increased to the upper bound 
+    # since it has been increased to the upper bound
     # or the new incremented config can be derived from a meta_cfg.
     # each hold[i] can only change from False to True.
     for i in range(len(config)):
@@ -111,6 +115,7 @@ def sat_config(config: tuple) -> bool:
     Note: the config is based on the sentence without
     1-type predicates (@T) and skolem predicates (@skolem)
     '''
+    return Config_SAT.check_config_by_cache(config)
     # the config is the cardinality constraint of 1-type predicates.
     # we can see it as partition constraint in the correspoding skolemized sentence.
     pcl: list = []
@@ -130,7 +135,7 @@ def sat_cc(cc: tuple[int]) -> bool:
             return True
     return False
 
-def update_PZ_evidence(evidence_dict: dict[Const, Pred], 
+def update_PZ_evidence(evidence_dict: dict[Const, Pred],
                       cc_xpred: dict[Pred, int],
                       relation: frozenset[AtomicFormula],
                       first_e: Const, second_e: Const):
@@ -162,7 +167,7 @@ def clean_P_evidence(evidence_dict: dict[Const, Pred], cc_xpred: dict[Pred, int]
     for e, xpred in evidence_dict.items():
         cc_xpred[xpred] -= 1
         evidence_dict[e] = Evi_to_Xpred[frozenset({~Pred_P(X)}|
-            {atom for atom in Xpred_to_Evi[xpred] 
+            {atom for atom in Xpred_to_Evi[xpred]
                     if not atom.pred.name.startswith('@P')})]
         cc_xpred[evidence_dict[e]] += 1
 
@@ -175,8 +180,8 @@ def update_A_evidence(ego_element: Const, evidence_dict: dict[Const, Pred], cc_x
                 {atom for atom in Xpred_to_Evi[evidence_dict[ego_element]] if atom != ~Pred_A(X)})]
     cc_xpred[evidence_dict[ego_element]] += 1
 
-def domain_recursion(domain: list[Const], 
-                     evidence_dict: dict[Const, Pred], 
+def domain_recursion(domain: list[Const],
+                     evidence_dict: dict[Const, Pred],
                      cc_xpred: dict[Pred, int],
                      cur_model: set[AtomicFormula] = set(),):
     if domain.__len__() == 0:
@@ -193,11 +198,11 @@ def domain_recursion(domain: list[Const],
     # print('    '*(3-len(domain))+f'current element: {ego_element}')
     clean_P_evidence(evidence_dict, cc_xpred)
     update_A_evidence(ego_element, evidence_dict, cc_xpred)
-    ego_structure_sampling(ego_element=ego_element, domain_todo=domain, domain_done=[], 
+    ego_structure_sampling(ego_element=ego_element, domain_todo=domain, domain_done=[],
                            evidence_dict=evidence_dict, cc_xpred=cc_xpred,
                            cur_model=cur_model)
 
-def ego_structure_sampling(ego_element: Const, 
+def ego_structure_sampling(ego_element: Const,
                            domain_todo: list[Const], domain_done: list[Const],
                            evidence_dict: dict[Const, Pred], cc_xpred: dict[Pred, int],
                            cur_model: set[AtomicFormula]):
@@ -230,7 +235,7 @@ def ego_structure_sampling(ego_element: Const,
 def generate_config_class(domain_size:int, len_config:int, delta:int):
     '''
     Generate all possible tuple (k_0, k_delta) where
-    k_0 is the number of cells that have no element and 
+    k_0 is the number of cells that have no element and
     k_delta is the number of cells that have delta elements.
     '''
     for k_zero in range(len_config):
@@ -289,7 +294,7 @@ def generate_template_config(base_config: tuple, flag: bool, delta):
                 yield base_config
         else:
             pass
-    
+
     for i in range(len(base_config)):
         if base_config[i] == 0 or base_config[i] == delta :
             continue
@@ -318,7 +323,7 @@ def generate_sat_configs(domain_size, template_config, delta):
             yield tuple(config)
     else:
         yield template_config
-     
+
 def cell_assignment(domain: set[Const], config: tuple[int]):
     """
     Distribute cells to domain elements according to the configuration.
@@ -336,14 +341,14 @@ def cell_assignment(domain: set[Const], config: tuple[int]):
 
     yield from backtrack(domain, [])
 
-def get_domain_order(cells: list[Cell], 
+def get_domain_order(cells: list[Cell],
                     cell_correlation: dict[tuple[Cell, Cell], int],
                     config: tuple[int]):
-    
+
     cell_to_index: dict[Cell, int] = dict()
     for index, cell in enumerate(cells):
         cell_to_index[cell] = index
-    
+
     cell_importance: dict[Cell, int] = dict()
     for i, cell_i in enumerate(cells):
         cell_importance[cell_i] = 0
@@ -354,10 +359,10 @@ def get_domain_order(cells: list[Cell],
                 cell_importance[cell_i] += cell_correlation[(cell_i, cell_j)] * (config[j] - 1)
             else:
                 cell_importance[cell_i] += cell_correlation[(cell_i, cell_j)] * config[j]
-    
+
     # sorted_cells = sorted(cell_importance, key=lambda x: cell_importance[x], reverse=True)
     max_cell = max(cell_importance, key=cell_importance.get)
-    
+
     config = list(config)
     domain_order = [cell_to_index[max_cell]]
     config[cell_to_index[max_cell]] -= 1
@@ -375,7 +380,7 @@ def get_domain_order(cells: list[Cell],
                 max_correlation = cur_correlation
         domain_order.append(cell_to_index[max_cell])
         config[cell_to_index[max_cell]] -= 1
-    
+
     domain_order.reverse()
     return domain_order
 
@@ -412,56 +417,62 @@ if __name__ == '__main__':
         logzero.loglevel(logging.CRITICAL)
     else:
         logzero.loglevel(logging.INFO)
-    
+
     logger.setLevel(logging.CRITICAL)
-    # logger.setLevel(logging.INFO)    
-    
+    # logger.setLevel(logging.INFO)
+
     logzero.logfile('{}/log.txt'.format(args.output_dir), mode='w')
 
     problem = parse_input(args.input)
     context: EnumContext = EnumContext(problem)
-    
+
     if args.domain_size:
         context.domain = {Const(f'e{i}') for i in range(args.domain_size)}
-    
+
     DELTA = context.delta
     DOMAIN_SIZE = len(context.domain)
     MultinomialCoefficients.setup(DOMAIN_SIZE)
-    
+
     original_cells: list[Cell] = context.original_cells
     original_original_cell_correlation: dict[tuple[Cell, Cell], int] = context.original_cell_correlation
-    
+
     Zpred_to_Rpred = context.zpred_to_rpred
     Rpred_to_Zpred = context.rpred_to_zpred
 
     Rel_Dict = context.rel_dict
     uni_formula_with_AP = context.auxiliary_uni_formula
-    
+
     x_preds = context.x_preds
     evi_formulas = context.evi_formulas
     xpreds_with_P = context.xpreds_with_P
     Evi_to_Xpred = context.Evi_to_Xpred
     Xpred_to_Evi = context.Xpred_to_Evi
     uni_formula_with_APZX = context.auxiliary_uni_formula
-    
+
     uni_APZX_cell_graph = context.auxiliary_uni_formula_cell_graph
-    uni_APZX_cells: list[Cell] = uni_APZX_cell_graph.cells 
-    
+    uni_APZX_cells: list[Cell] = uni_APZX_cell_graph.cells
+
     # for cell in uni_APZX_cells:
     #     print(cell)
-    
+
     uni_APZX_cell_to_Tpred = context.auxcell_to_onetype_pred
     skolem_formula_APZXT = context.skolem_formula_DAPZXT
-    
-    
-    
+
+
+    # NOTE(lucien): init ConfigSAT
+    Config_SAT = ConfigSAT(context.auxiliary_uni_formula,
+                           context.auxiliary_ext_formulas,
+                           uni_APZX_cells,
+                           DELTA)
+
+
     # init META_CCS
     for i, cell in enumerate(uni_APZX_cells):
         if cell.is_positive(Pred_A):
             META_CCS[i] = set()
-    
+
     with Timer() as t_preprocess:
-        
+
         if False and os.path.exists(f'{args.input[:-7]}/cache/{args.input[:-7]}.{DOMAIN_SIZE}.cache'):
             with open(f'{args.input[:-7]}/cache/{args.input[:-7]}.{DOMAIN_SIZE}.cache', 'r') as file:
                 for line in file:
@@ -475,47 +486,48 @@ if __name__ == '__main__':
             sat_config.cache_clear()
             CurCells = uni_APZX_cells
             Cur_Cell_to_Tpred = uni_APZX_cell_to_Tpred
-            Cur_Cell_Graph = OptimizedCellGraphWithPC(skolem_formula_APZXT, context.get_weight, DOMAIN_SIZE, 
+            # NOTE(lucien)
+            Cur_Cell_Graph = OptimizedCellGraphWithPC(skolem_formula_APZXT, context.get_weight, DOMAIN_SIZE,
                                                     PartitionConstraint([(tau, 0) for tau in uni_APZX_cell_to_Tpred.values()]))
-            
+
             # we only consider the case that:
             # 1) there is only one element whose evidence contain '@A(X)'
             A_idx = [idx for idx, cell in enumerate(uni_APZX_cells) if cell.is_positive(Pred_A)]
             # 2) there is at least one element whose evidence contain '@P(X)'
-            P_idx = [idx for x_pred in xpreds_with_P 
+            P_idx = [idx for x_pred in xpreds_with_P
                             for idx, cell in enumerate(uni_APZX_cells) if cell.is_positive(x_pred)]
-            
+
             # find all possible initial configurations that satisfy above constraints
-            init_configs = get_init_configs(uni_APZX_cell_graph, len(context.original_ext_formulas), 
+            init_configs = get_init_configs(uni_APZX_cell_graph, len(context.original_ext_formulas),
                                             A_idx, P_idx, DOMAIN_SIZE)
             for init_config in init_configs:
-                init_holds = [True if (j in A_idx or init_config[j] == 0) else False 
+                init_holds = [True if (j in A_idx or init_config[j] == 0) else False
                                 for j in range(len(uni_APZX_cells))]
                 # a meta config is based on the sentence uni_formula_with_PZX (only @R, @A, @P, and @X)
                 # not the sentence with 1-type predicates (@T) and skolem predicates (@skolem)
                 calculate_meta_cc(tuple(init_config), tuple(init_holds))
-            
+
             # filename = f'{args.input[:-7]}.{DOMAIN_SIZE}.cache'
             # with open(filename, 'a') as file:
             #     for k, v in META_CCS.items():
             #         for cc in v:
             #             file.write(','.join(map(str, cc)))
             #             file.write('\n')
-                        
+
     preprocess_time = t_preprocess.elapsed
-    
+
     # print(SAT_COUNT)
     # print(len(META_CCS))
-    
+
     logger.info('time: %s', preprocess_time)
-    
+
     mc = 0
     with Timer() as t_enumaration:
     # global variables for 'sat_config' function
         sat_config.cache_clear()
         CurCells = original_cells
         Cur_Cell_to_Tpred = context.oricell_to_onetype_pred
-        Cur_Cell_Graph = OptimizedCellGraphWithPC(context.skolem_tau_formula, context.get_weight, DOMAIN_SIZE, 
+        Cur_Cell_Graph = OptimizedCellGraphWithPC(context.skolem_tau_formula, context.get_weight, DOMAIN_SIZE,
                                                     PartitionConstraint([(context.oricell_to_onetype_pred[cell], 0) for cell in original_cells]))
         try:
             # enumerate satisfiable configs
@@ -526,8 +538,8 @@ if __name__ == '__main__':
                     for tpl_config in generate_template_config(base_config, False, ori_delta):
                         for config in generate_sat_configs(DOMAIN_SIZE, tpl_config, ori_delta):
                             logger.info('The configuration: %s', config)
-                            domain_order = get_domain_order(original_cells, 
-                                                          original_original_cell_correlation, 
+                            domain_order = get_domain_order(original_cells,
+                                                          original_original_cell_correlation,
                                                           config)
                             # init cardinality constraint for each X pred
                             cc_xpred: dict[Pred, int] = {x: 0 for x in x_preds}
@@ -536,7 +548,7 @@ if __name__ == '__main__':
                             # assign 1-types for all elements
                             for domain_partition in cell_assignment(context.domain, config):
                                 cur_model_couting = MC
-                                logger.info('The distribution:')
+                                logger.debug('The distribution:')
                                 # init evidence set (1-type, block type and negative A)
                                 evidence_dict: dict[Const, Pred] = {}
                                 for cell, elements in zip(original_cells, domain_partition):
@@ -544,7 +556,7 @@ if __name__ == '__main__':
                                     for element in elements:
                                         Domain_to_Cell[element] = cell
                                         evidence_dict[element] = Evi_to_Xpred[context.init_evi_dict[cell]]
-                                logger.info('The init evidence: \n%s', evidence_dict)
+                                logger.debug('The init evidence: \n%s', evidence_dict)
                                 domain_list = get_domain_list(domain_order, domain_partition)
                                 domain_recursion(domain_list, evidence_dict, cc_xpred.copy())
                                 if not ENABLE_DUPLICATE_CONFIG:
@@ -553,14 +565,14 @@ if __name__ == '__main__':
         except ExitRecursion:
             logger.info('Early stop, current MC: %s', MC)
             pass
-                    
+
     enumeration_time = t_enumaration.elapsed
     logger.info('The number of models: %s(%s)', MC, mc)
     logger.info('time: %s', enumeration_time)
-    
-    
-    
-    
+
+    Config_SAT.solver.delete()
+
+
     # sorted_keys = sorted(STATIS_META_CCS, key=lambda k: (STATIS_META_CCS[k], sum(k)), reverse=True)
     # sorted_keys = sorted(STATIS_META_CCS, key=lambda k: (sum(k)), reverse=False)
     # for k in sorted_keys:
@@ -572,15 +584,15 @@ if __name__ == '__main__':
     # for evi_formula in evi_formulas:
     #     print(evi_formula)
     # print()
-    
+
     num_meta_cc = 0
     for k, v in META_CCS.items():
         num_meta_cc += len(v)
-    
+
     avg_time = enumeration_time / MC if ENABLE_DUPLICATE_CONFIG else enumeration_time / mc
     res = f'{DOMAIN_SIZE}, {preprocess_time}, {enumeration_time}, {num_meta_cc}, {MC}, {mc}, {round(avg_time, 7)}\n'
     print(res)
-    
+
     filename = args.input + '.res'
     with open(filename, 'a') as file:
         file.write(res)
