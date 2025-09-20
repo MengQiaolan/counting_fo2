@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import argparse
-import logging
 import logzero
 
 from logzero import logger
@@ -65,7 +64,7 @@ def wfomc(problem: WFOMCProblem, algo: Algo = Algo.STANDARD) -> Rational:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='WFOMC for MLN',
+        description='WFOMC',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument('--input', '-i', type=str, required=True,
@@ -86,9 +85,9 @@ if __name__ == '__main__':
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
     if args.debug:
-        logzero.loglevel(logging.DEBUG)
+        logzero.loglevel(logzero.DEBUG)
     else:
-        logzero.loglevel(logging.INFO)
+        logzero.loglevel(logzero.INFO)
     logzero.logfile('{}/log.txt'.format(args.output_dir), mode='w')
 
     with Timer() as t:

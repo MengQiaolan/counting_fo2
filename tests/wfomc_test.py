@@ -1,5 +1,4 @@
 import pytest
-import logging
 import logzero
 
 from pathlib import Path
@@ -11,7 +10,7 @@ from wfomc.algo import Algo
 current_path = Path(__file__).parent.absolute()
 model_files = (current_path.parent / 'models').glob('*')
 algos = [Algo.STANDARD, Algo.FAST, Algo.FASTv2]
-logzero.loglevel(logging.ERROR)
+logzero.loglevel(logzero.ERROR)
 
 
 def wfomc_proxy(model_file, algo):
